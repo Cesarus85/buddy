@@ -171,8 +171,27 @@ class PokemonARApp {
             });
             
             console.log('Erstelle Referenzraum...');
-            this.xrReferenceSpace = await this.xrSession.requestReferenceSpace('local');
-            console.log('Referenzraum erstellt');
+            
+            // Versuche verschiedene Reference Spaces
+            const referenceSpaces = ['local-floor', 'bounded-floor', 'local', 'viewer'];
+            let referenceSpaceCreated = false;
+            
+            for (const spaceType of referenceSpaces) {
+                try {
+                    console.log(`Versuche Reference Space: ${spaceType}`);
+                    this.xrReferenceSpace = await this.xrSession.requestReferenceSpace(spaceType);
+                    console.log(`Referenzraum erstellt: ${spaceType}`);
+                    this.updateStatus(`Referenzraum: ${spaceType}`);
+                    referenceSpaceCreated = true;
+                    break;
+                } catch (spaceError) {
+                    console.warn(`${spaceType} nicht unterstützt:`, spaceError);
+                }
+            }
+            
+            if (!referenceSpaceCreated) {
+                throw new Error('Kein unterstützter Reference Space gefunden');
+            }
             
             document.getElementById('startButton').style.display = 'none';
             this.updateStatus('AR aktiv! Pokemon sollte erscheinen...');
