@@ -42,404 +42,66 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pokémon AR Passthrough</title>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
-  <style>
-    body {
-      margin: 0;
-      padding: 0;
-      background-color: #000;
-      color: white;
-      font-family: Arial, sans-serif;
-      overflow: hidden;
-    }
-    
-    #startButton {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      padding: 20px 40px;
-      font-size: 18px;
-      background: rgba(255, 255, 255, 0.9);
-      color: black;
-      border: none;
-      border-radius: 10px;
-      cursor: pointer;
-      z-index: 1000;
-    }
-    
-    #status {
-      position: absolute;
-      top: 20px;
-      left: 20px;
-      z-index: 1000;
-      background: rgba(0, 0, 0, 0.7);
-      padding: 10px;
-      border-radius: 5px;
-      font-size: 14px;
-    }
-    
-    #instructions {
-      position: absolute;
-      bottom: 20px;
-      left: 20px;
-      right: 20px;
-      z-index: 1000;
-      background: rgba(0, 0, 0, 0.7);
-      padding: 15px;
-      border-radius: 5px;
-      font-size: 12px;
-      text-align: center;
-    }
-  </style>
+  <title>Pokémon-ähnliche WebXR-Anwendung mit Passthrough</title>
+  <!-- A-Frame für WebXR -->
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+  <!-- AR.js für Ebenenerkennung und Passthrough -->
+  <script src="https://cdn.jsdelivr.net/gh/jeromeetienne/AR.js@2.3.1/aframe/build/aframe-ar.min.js"></script>
 </head>
 <body>
-  <button id="startButton">AR Passthrough starten</button>
-  <div id="status">WebXR wird initialisiert...</div>
-  <div id="instructions">
-    Tippen Sie auf den Bildschirm, um das Pokémon auf einer erkannten Fläche zu platzieren
-  </div>
-  
-  <script>
-    class PokemonPassthroughAR {
-      constructor() {
-        this.scene = null;
-        this.camera = null;
-        this.renderer = null;
-        this.pokemon = null;
-        this.xrSession = null;
-        this.xrReferenceSpace = null;
-        this.hitTestSource = null;
-        this.animationTime = 0;
-        this.pokemonPlaced = false;
-        this.pokemonGroup = null;
-        
-        this.init();
-      }
-      
-      async init() {
-        this.updateStatus('WebXR Passthrough wird geprüft...');
-        
-        if (!navigator.xr) {
-          this.updateStatus('WebXR nicht unterstützt');
-          return;
-        }
-        
-        try {
-          const supported = await navigator.xr.isSessionSupported('immersive-ar');
-          if (!supported) {
-            this.updateStatus('AR Passthrough nicht unterstützt');
-            return;
-          }
-          
-          this.updateStatus('AR Passthrough bereit');
-          this.setupScene();
-          this.setupEventListeners();
-        } catch (error) {
-          console.error('WebXR Fehler:', error);
-          this.updateStatus('Fehler bei WebXR-Initialisierung');
-        }
-      }
-      
-      setupScene() {
-        this.scene = new THREE.Scene();
-        this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-        
-        this.renderer = new THREE.WebGLRenderer({ 
-          antialias: true, 
-          alpha: true 
-        });
-        this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(window.devicePixelRatio);
-        this.renderer.xr.enabled = true;
-        document.body.appendChild(this.renderer.domElement);
-        
-        // Beleuchtung für AR-Szene
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
-        this.scene.add(ambientLight);
-        
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight.position.set(1, 1, 0.5);
-        directionalLight.castShadow = true;
-        this.scene.add(directionalLight);
-        
-        this.createPokemon();
-      }
-      
-      createPokemon() {
-        this.pokemonGroup = new THREE.Group();
-        
-        // Körper (gelbe Kugel)
-        const bodyGeometry = new THREE.SphereGeometry(0.1, 16, 16);
-        bodyGeometry.scale(1, 1.2, 1);
-        const bodyMaterial = new THREE.MeshLambertMaterial({ color: 0xffff00 });
-        const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-        body.position.y = 0.1;
-        body.castShadow = true;
-        this.pokemonGroup.add(body);
-        
-        // Kopf
-        const headGeometry = new THREE.SphereGeometry(0.08, 16, 16);
-        const headMaterial = new THREE.MeshLambertMaterial({ color: 0xffff00 });
-        const head = new THREE.Mesh(headGeometry, headMaterial);
-        head.position.y = 0.22;
-        head.castShadow = true;
-        this.pokemonGroup.add(head);
-        
-        // Ohren (Pikachu-ähnlich)
-        const earGeometry = new THREE.ConeGeometry(0.03, 0.08, 8);
-        const earMaterial = new THREE.MeshLambertMaterial({ color: 0xffff00 });
-        
-        const leftEar = new THREE.Mesh(earGeometry, earMaterial);
-        leftEar.position.set(-0.05, 0.28, 0.02);
-        leftEar.rotation.z = -0.3;
-        leftEar.castShadow = true;
-        this.pokemonGroup.add(leftEar);
-        
-        const rightEar = new THREE.Mesh(earGeometry, earMaterial);
-        rightEar.position.set(0.05, 0.28, 0.02);
-        rightEar.rotation.z = 0.3;
-        rightEar.castShadow = true;
-        this.pokemonGroup.add(rightEar);
-        
-        // Ohrspitzen (schwarz)
-        const earTipMaterial = new THREE.MeshLambertMaterial({ color: 0x333333 });
-        const leftEarTip = new THREE.Mesh(new THREE.SphereGeometry(0.01, 8, 8), earTipMaterial);
-        leftEarTip.position.set(-0.055, 0.32, 0.02);
-        leftEarTip.castShadow = true;
-        this.pokemonGroup.add(leftEarTip);
-        
-        const rightEarTip = new THREE.Mesh(new THREE.SphereGeometry(0.01, 8, 8), earTipMaterial);
-        rightEarTip.position.set(0.055, 0.32, 0.02);
-        rightEarTip.castShadow = true;
-        this.pokemonGroup.add(rightEarTip);
-        
-        // Augen
-        const eyeMaterial = new THREE.MeshLambertMaterial({ color: 0x333333 });
-        const leftEye = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), eyeMaterial);
-        leftEye.position.set(-0.025, 0.23, 0.07);
-        this.pokemonGroup.add(leftEye);
-        
-        const rightEye = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), eyeMaterial);
-        rightEye.position.set(0.025, 0.23, 0.07);
-        this.pokemonGroup.add(rightEye);
-        
-        // Wangen (rot)
-        const cheekMaterial = new THREE.MeshLambertMaterial({ color: 0xff6666 });
-        const leftCheek = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), cheekMaterial);
-        leftCheek.position.set(-0.065, 0.21, 0.05);
-        leftCheek.scale.set(1, 0.6, 0.6);
-        this.pokemonGroup.add(leftCheek);
-        
-        const rightCheek = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), cheekMaterial);
-        rightCheek.position.set(0.065, 0.21, 0.05);
-        rightCheek.scale.set(1, 0.6, 0.6);
-        this.pokemonGroup.add(rightCheek);
-        
-        // Schwanz
-        const tailGeometry = new THREE.ConeGeometry(0.02, 0.12, 8);
-        const tailMaterial = new THREE.MeshLambertMaterial({ color: 0xffff00 });
-        const tail = new THREE.Mesh(tailGeometry, tailMaterial);
-        tail.position.set(0, 0.15, -0.1);
-        tail.rotation.x = Math.PI / 3;
-        tail.castShadow = true;
-        this.pokemonGroup.add(tail);
-        
-        // Bodenschatten
-        const shadowGeometry = new THREE.CircleGeometry(0.12, 16);
-        const shadowMaterial = new THREE.MeshBasicMaterial({ 
-          color: 0x000000, 
-          opacity: 0.3, 
-          transparent: true 
-        });
-        const shadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
-        shadow.rotation.x = -Math.PI / 2;
-        shadow.position.y = 0.001;
-        this.pokemonGroup.add(shadow);
-        
-        this.pokemonGroup.visible = false;
-        this.scene.add(this.pokemonGroup);
-        this.pokemon = this.pokemonGroup;
-      }
-      
-      setupEventListeners() {
-        document.getElementById('startButton').addEventListener('click', () => {
-          this.startAR();
-        });
-        
-        // Touch/Click für Platzierung
-        this.renderer.domElement.addEventListener('click', (event) => {
-          if (this.xrSession && !this.pokemonPlaced) {
-            this.onSelect(event);
-          }
-        });
-        
-        window.addEventListener('resize', () => {
-          this.camera.aspect = window.innerWidth / window.innerHeight;
-          this.camera.updateProjectionMatrix();
-          this.renderer.setSize(window.innerWidth, window.innerHeight);
-        });
-      }
-      
-      async startAR() {
-        this.updateStatus('AR Passthrough wird gestartet...');
-        
-        try {
-          this.xrSession = await navigator.xr.requestSession('immersive-ar', {
-            requiredFeatures: ['local'],
-            optionalFeatures: ['hit-test', 'plane-detection', 'anchors']
-          });
-          
-          this.xrSession.addEventListener('end', () => {
-            this.updateStatus('AR Session beendet');
-            document.getElementById('startButton').style.display = 'block';
-            this.pokemonPlaced = false;
-            this.pokemon.visible = false;
-          });
-          
-          this.xrReferenceSpace = await this.xrSession.requestReferenceSpace('local-floor');
-          
-          // Hit-test für Ebenenerkennung
-          const viewerSpace = await this.xrSession.requestReferenceSpace('viewer');
-          this.hitTestSource = await this.xrSession.requestHitTestSource({ space: viewerSpace });
-          
-          this.renderer.xr.setSession(this.xrSession);
-          document.getElementById('startButton').style.display = 'none';
-          this.updateStatus('AR aktiv - Tippen für Platzierung');
-          
-          this.startRenderLoop();
-          
-        } catch (error) {
-          console.error('AR Start Fehler:', error);
-          this.updateStatus(`AR Fehler: ${error.message}`);
-        }
-      }
-      
-      onSelect(event) {
-        if (!this.hitTestSource || this.pokemonPlaced) return;
-        
-        // Verwende den aktuellen Frame für Hit-testing
-        const frame = this.renderer.xr.getFrame();
-        if (!frame) return;
-        
-        const hitTestResults = frame.getHitTestResults(this.hitTestSource);
-        if (hitTestResults.length > 0) {
-          const hit = hitTestResults[0];
-          const pose = hit.getPose(this.xrReferenceSpace);
-          
-          if (pose) {
-            this.pokemon.position.copy(pose.transform.position);
-            this.pokemon.visible = true;
-            this.pokemonPlaced = true;
-            this.updateStatus('Pokémon platziert!');
-            
-            // Platzierungs-Animation
-            this.pokemon.scale.set(0, 0, 0);
-            this.animateScale(this.pokemon, { x: 1, y: 1, z: 1 }, 500);
-          }
-        }
-      }
-      
-      animateScale(object, targetScale, duration) {
-        const startScale = { ...object.scale };
-        const startTime = performance.now();
-        
-        const animate = () => {
-          const elapsed = performance.now() - startTime;
-          const progress = Math.min(elapsed / duration, 1);
-          
-          // Bounce-Effect
-          const easeProgress = progress < 0.5 
-            ? 2 * progress * progress 
-            : 1 - Math.pow(-2 * progress + 2, 3) / 2;
-          
-          object.scale.x = startScale.x + (targetScale.x - startScale.x) * easeProgress;
-          object.scale.y = startScale.y + (targetScale.y - startScale.y) * easeProgress;
-          object.scale.z = startScale.z + (targetScale.z - startScale.z) * easeProgress;
-          
-          if (progress < 1) {
-            requestAnimationFrame(animate);
-          }
-        };
-        
-        animate();
-      }
-      
-      startRenderLoop() {
-        const render = (timestamp, frame) => {
-          if (!this.xrSession) return;
-          
-          this.animationTime = timestamp * 0.001;
-          this.animatePokemon();
-          
-          this.renderer.render(this.scene, this.camera);
-        };
-        
-        this.renderer.setAnimationLoop(render);
-      }
-      
-      animatePokemon() {
-        if (!this.pokemon || !this.pokemon.visible || !this.pokemonPlaced) return;
-        
-        // Komplexere Animation
-        const time = this.animationTime;
-        
-        // Hüpfen
-        const bounceHeight = 0.03;
-        const bounceSpeed = 4;
-        const bounceY = Math.abs(Math.sin(time * bounceSpeed)) * bounceHeight;
-        
-        // Seitliches Wippen
-        const wiggleAmount = 0.015;
-        const wiggleSpeed = 2.5;
-        const wiggleX = Math.sin(time * wiggleSpeed) * wiggleAmount;
-        
-        // Rotation
-        const rotationSpeed = 0.5;
-        const rotationAmount = 0.2;
-        const rotationY = Math.sin(time * rotationSpeed) * rotationAmount;
-        
-        // Atem-Animation (leichte Skalierung)
-        const breathSpeed = 1.5;
-        const breathAmount = 0.02;
-        const breathScale = 1 + Math.sin(time * breathSpeed) * breathAmount;
-        
-        // Animation anwenden
-        this.pokemon.position.y += bounceY;
-        this.pokemon.position.x += wiggleX;
-        this.pokemon.rotation.y = rotationY;
-        
-        // Nur den Körper atmen lassen
-        if (this.pokemon.children[0]) {
-          this.pokemon.children[0].scale.set(breathScale, breathScale, breathScale);
-        }
-        
-        // Ohren leicht bewegen
-        if (this.pokemon.children[2] && this.pokemon.children[3]) {
-          const earWiggle = Math.sin(time * 3) * 0.1;
-          this.pokemon.children[2].rotation.z = -0.3 + earWiggle;
-          this.pokemon.children[3].rotation.z = 0.3 - earWiggle;
-        }
-        
-        // Schwanz bewegen
-        if (this.pokemon.children[8]) {
-          const tailWag = Math.sin(time * 2.5) * 0.3;
-          this.pokemon.children[8].rotation.z = tailWag;
-        }
-      }
-      
-      updateStatus(message) {
-        const statusElement = document.getElementById('status');
-        if (statusElement) {
-          statusElement.textContent = message;
-        }
-        console.log('Status:', message);
-      }
-    }
+  <a-scene
+    vr-mode-ui="enabled: false"
+    arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false; sourceWidth: 1280; sourceHeight: 720;"
+    renderer="logarithmicDepthBuffer: true;">
     
-    // AR App starten
-    new PokemonPassthroughAR();
-  </script>
+    <!-- Kamera mit Passthrough -->
+    <a-camera
+      gps-camera
+      rotation-reader
+      position="0 1.6 0"
+      look-controls="enabled: true">
+    </a-camera>
+
+    <!-- Ebene für die Platzierung der Figur -->
+    <a-entity
+      arjs-anchor="planeDetection: true;"
+      position="0 0 -2"
+      scale="0.5 0.5 0.5">
+      
+      <!-- Pokémon-ähnliche Figur (vereinfachtes 3D-Modell mit Kugel und Details) -->
+      <a-entity id="pokemon" position="0 0.5 0">
+        <!-- Körper (Kugel) -->
+        <a-sphere
+          radius="0.3"
+          color="#FF6347"
+          position="0 0 0">
+        </a-sphere>
+        <!-- Augen -->
+        <a-sphere
+          radius="0.05"
+          color="black"
+          position="-0.1 0.1 0.25">
+        </a-sphere>
+        <a-sphere
+          radius="0.05"
+          color="black"
+          position="0.1 0.1 0.25">
+        </a-sphere>
+        <!-- Animation für leichte Bewegung -->
+        <a-animation
+          attribute="position"
+          dur="2000"
+          from="0 0.5 0"
+          to="0.2 0.5 0"
+          direction="alternate"
+          repeat="indefinite">
+        </a-animation>
+      </a-entity>
+    </a-entity>
+
+    <!-- Licht für bessere Sichtbarkeit -->
+    <a-light type="ambient" intensity="0.5"></a-light>
+    <a-light type="directional" intensity="0.5" position="0 2 1"></a-light>
+  </a-scene>
 </body>
 </html>
