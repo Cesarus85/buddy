@@ -1,107 +1,165 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pokémon-ähnliche WebXR-Anwendung mit Passthrough</title>
-  <!-- A-Frame für WebXR -->
-  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-  <!-- AR.js für Ebenenerkennung und Passthrough -->
-  <script src="https://cdn.jsdelivr.net/gh/jeromeetienne/AR.js@2.3.1/aframe/build/aframe-ar.min.js"></script>
+  <meta charset="utf-8" />
+  <title>WebXR AR Pocket Creature</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <style>
+    /* Basic full‑screen canvas & overlay style */
+    html,body{width:100%;height:100%;margin:0;padding:0;overflow:hidden;font-family:sans-serif;background:transparent;}
+    #enter-ar{position:fixed;bottom:2rem;left:50%;transform:translateX(-50%);padding:0.75rem 2rem;font-size:1.2rem;border:none;border-radius:1rem;background:#ffcc00;box-shadow:0 4px 12px rgba(0,0,0,0.25);cursor:pointer;}
+  </style>
 </head>
 <body>
-  <a-scene
-    vr-mode-ui="enabled: false"
-    arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false; sourceWidth: 1280; sourceHeight: 720;"
-    renderer="logarithmicDepthBuffer: true;">
-    
-    <!-- Kamera mit Passthrough -->
-    <a-camera
-      gps-camera
-      rotation-reader
-      position="0 1.6 0"
-      look-controls="enabled: true">
-    </a-camera>
+  <!-- User gesture button (TLS + user‑activation required on Quest) -->
+  <button id="enter-ar">Start AR</button>
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.164/build/three.module.js';
+    import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.164/examples/jsm/loaders/GLTFLoader.js';
+    import { ARButton } from 'https://cdn.jsdelivr.net/npm/three@0.164/examples/jsm/webxr/ARButton.js';
 
-    <!-- Ebene für die Platzierung der Figur -->
-    <a-entity
-      arjs-anchor="planeDetection: true;"
-      position="0 0 -2"
-      scale="0.5 0.5 0.5">
-      
-      <!-- Pokémon-ähnliche Figur (vereinfachtes 3D-Modell mit Kugel und Details) -->
-      <a-entity id="pokemon" position="0 0.5 0">
-        <!-- Körper (Kugel) -->
-        <a-sphere
-          radius="0.3"
-          color="#FF6347"
-          position="0 0 0">
-        </a-sphere>
-        <!-- Augen -->
-        <a-sphere
-          radius="0.05"
-          color="black"
-          position="-0.1 0.1 0.25">
-        </a-sphere>
-        <a-sphere
-          radius="0.05"
-          color="black"
-          position="0.1 0.1 0.25">
-        </a-sphere>
-        <!-- Animation für leichte Bewegung -->
-        <a-animation
-          attribute="position"
-          dur="2000"
-          from="0 0.5 0"
-          to="0.2 0.5 0"
-          direction="alternate"
-          repeat="indefinite">
-        </a-animation>
-      </a-entity>
-    </a-entity>
+    let camera, scene, renderer;
+    let controller, hitTestSource = null, hitTestSourceRequested = false;
+    let reticle, character, mixer;
+    const clock = new THREE.Clock();
 
-    <!-- Licht für bessere Sichtbarkeit -->
-    <a-light type="ambient" intensity="0.5"></a-light>
-    <a-light type="directional" intensity="0.5" position="0 2 1"></a-light>
-  </a-scene>
+    /* ---------- Scene/Renderer bootstrap ---------- */
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera();
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); // alpha → passthrough
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    /* ---------- Ground‑finding reticle ---------- */
+    const ringGeo = new THREE.RingGeometry(0.08, 0.1, 32).rotateX(-Math.PI / 2);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+    reticle = new THREE.Mesh(ringGeo, ringMat);
+    reticle.matrixAutoUpdate = false;
+    reticle.visible = false;
+    scene.add(reticle);
+
+    /* ---------- Ambient + directional light for model shading ---------- */
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 0.6));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+    dir.position.set(5, 10, 2);
+    scene.add(dir);
+
+    /* ---------- Start‑AR button logic ---------- */
+    document.getElementById('enter-ar').addEventListener('click', async () => {
+      if (!navigator.xr) {
+        alert('WebXR nicht verfügbar. Versuche es in einem kompatiblen Browser/Headset.');
+        return;
+      }
+
+      const supported = await navigator.xr.isSessionSupported('immersive-ar');
+      if (!supported) {
+        alert('AR‑Sitzung wird nicht unterstützt.');
+        return;
+      }
+
+      const session = await navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['local-floor', 'hit-test'],
+        optionalFeatures: ['plane-detection', 'anchors', 'dom-overlay', 'lighting-estimation', 'bounded-floor', 'depth-sensing'],
+        domOverlay: { root: document.body }
+      });
+
+      session.addEventListener('end', () => {
+        document.getElementById('enter-ar').style.display = 'block';
+        hitTestSourceRequested = false;
+        hitTestSource = null;
+      });
+
+      renderer.xr.setReferenceSpaceType('local-floor');
+      await renderer.xr.setSession(session);
+      document.getElementById('enter-ar').style.display = 'none';
+
+      controller = renderer.xr.getController(0);
+      controller.addEventListener('select', onSelect);
+      scene.add(controller);
+
+      renderer.setAnimationLoop(render);
+    });
+
+    /* ---------- On‑select: drop creature once ---------- */
+    function onSelect() {
+      if (!reticle.visible || character) return; // only place once
+      character = createCreature();
+      character.position.setFromMatrixPosition(reticle.matrix);
+      scene.add(character);
+    }
+
+    /* ---------- Creature creation & idle sway animation ---------- */
+    function createCreature() {
+      // Try to load external GLB (character.glb). Fallback to geom if missing.
+      const group = new THREE.Group();
+      const loader = new GLTFLoader();
+      loader.load(
+        'character.glb',
+        gltf => {
+          const model = gltf.scene;
+          model.scale.setScalar(0.25);
+          group.add(model);
+          setupSway(model);
+        },
+        undefined,
+        () => {
+          // fallback – little red ball w/ ears
+          const body = new THREE.Mesh(new THREE.SphereGeometry(0.1), new THREE.MeshStandardMaterial({ color: 0xff5555 }));
+          body.position.y = 0.1;
+          const earGeo = new THREE.ConeGeometry(0.05, 0.1);
+          const earMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+          const leftEar = new THREE.Mesh(earGeo, earMat);
+          const rightEar = leftEar.clone();
+          leftEar.position.set(-0.06, 0.22, 0);
+          rightEar.position.set(0.06, 0.22, 0);
+          group.add(body, leftEar, rightEar);
+          setupSway(group);
+        }
+      );
+      return group;
+    }
+
+    function setupSway(target) {
+      const clip = new THREE.AnimationClip('sway', -1, [new THREE.VectorKeyframeTrack('.rotation[y]', [0, 1, 2], [0, -0.3, 0])]);
+      mixer = new THREE.AnimationMixer(target);
+      mixer.clipAction(clip).setLoop(THREE.LoopPingPong).play();
+    }
+
+    /* ---------- Main render loop ---------- */
+    function render(timestamp, frame) {
+      if (frame) {
+        const session = renderer.xr.getSession();
+        const referenceSpace = renderer.xr.getReferenceSpace();
+
+        // Create a hit‑test source once per session
+        if (!hitTestSourceRequested) {
+          session.requestReferenceSpace('viewer').then(viewerSpace => {
+            session.requestHitTestSource({ space: viewerSpace }).then(source => {
+              hitTestSource = source;
+            });
+          });
+          hitTestSourceRequested = true;
+        }
+
+        if (hitTestSource) {
+          const hitTestResults = frame.getHitTestResults(hitTestSource);
+          if (hitTestResults.length) {
+            const hit = hitTestResults[0];
+            const pose = hit.getPose(referenceSpace);
+            reticle.visible = true;
+            reticle.matrix.fromArray(pose.transform.matrix);
+          } else {
+            reticle.visible = false;
+          }
+        }
+      }
+
+      const dt = clock.getDelta();
+      if (mixer) mixer.update(dt);
+      renderer.render(scene, camera);
+    }
+  </script>
 </body>
 </html>
