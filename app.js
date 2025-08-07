@@ -143,19 +143,33 @@ class PokemonARApp {
         
         try {
             this.xrSession = await navigator.xr.requestSession('immersive-ar', {
-                requiredFeatures: ['local', 'plane-detection'],
-                optionalFeatures: ['hit-test']
+                requiredFeatures: ['local'],
+                optionalFeatures: ['plane-detection', 'hit-test', 'anchors']
             });
             
+            this.updateStatus('Session erstellt, initialisiere Renderer...');
             await this.renderer.xr.setSession(this.xrSession);
             
+            this.updateStatus('Erstelle Referenzraum...');
             this.xrReferenceSpace = await this.xrSession.requestReferenceSpace('local');
             
-            const viewerSpace = await this.xrSession.requestReferenceSpace('viewer');
-            this.hitTestSource = await this.xrSession.requestHitTestSource({ space: viewerSpace });
+            try {
+                const viewerSpace = await this.xrSession.requestReferenceSpace('viewer');
+                this.hitTestSource = await this.xrSession.requestHitTestSource({ space: viewerSpace });
+                this.updateStatus('Hit-Test aktiviert');
+            } catch (hitTestError) {
+                console.warn('Hit-Test nicht verfügbar:', hitTestError);
+                this.updateStatus('Hit-Test nicht verfügbar, verwende Fallback');
+            }
             
             document.getElementById('startButton').style.display = 'none';
-            this.updateStatus('AR aktiv - Suche nach Ebenen...');
+            this.updateStatus('AR aktiv - Bewege das Gerät zum Scannen...');
+            
+            setTimeout(() => {
+                if (!this.pokemon.visible) {
+                    this.placeOnDefaultPosition();
+                }
+            }, 3000);
             
             this.renderer.setAnimationLoop((timestamp, frame) => {
                 this.render(timestamp, frame);
@@ -163,7 +177,8 @@ class PokemonARApp {
             
         } catch (error) {
             console.error('Fehler beim Starten der AR-Session:', error);
-            this.updateStatus('Fehler beim Starten der AR-Session');
+            this.updateStatus(`Fehler: ${error.message}`);
+            document.getElementById('startButton').style.display = 'block';
         }
     }
     
@@ -185,21 +200,34 @@ class PokemonARApp {
     }
     
     handlePlaneDetection(frame) {
+        if (this.pokemon.visible) return;
+        
         const detectedPlanes = frame.detectedPlanes;
         
-        if (detectedPlanes && detectedPlanes.size > 0 && !this.pokemon.visible) {
+        if (detectedPlanes && detectedPlanes.size > 0) {
+            console.log(`${detectedPlanes.size} Ebenen erkannt`);
+            this.updateStatus(`${detectedPlanes.size} Ebenen gefunden...`);
+            
             for (const plane of detectedPlanes) {
+                console.log('Ebenenorientierung:', plane.orientation);
+                
                 if (plane.orientation === 'horizontal') {
-                    const pose = frame.getPose(plane.planeSpace, this.xrReferenceSpace);
-                    if (pose) {
-                        this.pokemon.position.set(
-                            pose.transform.position.x,
-                            pose.transform.position.y,
-                            pose.transform.position.z
-                        );
-                        this.pokemon.visible = true;
-                        this.updateStatus('Pokemon gefunden! 🎉');
-                        break;
+                    try {
+                        const pose = frame.getPose(plane.planeSpace, this.xrReferenceSpace);
+                        if (pose) {
+                            this.pokemon.position.set(
+                                pose.transform.position.x,
+                                pose.transform.position.y + 0.1,
+                                pose.transform.position.z
+                            );
+                            this.pokemon.userData.basePosition = this.pokemon.position.clone();
+                            this.pokemon.visible = true;
+                            this.updateStatus('Pokemon auf Ebene platziert! 🎉');
+                            console.log('Pokemon positioniert auf:', this.pokemon.position);
+                            break;
+                        }
+                    } catch (error) {
+                        console.warn('Fehler bei Ebenen-Pose:', error);
                     }
                 }
             }
@@ -207,24 +235,42 @@ class PokemonARApp {
     }
     
     handleHitTest(frame) {
-        if (!this.hitTestSource) return;
+        if (!this.hitTestSource || this.pokemon.visible) return;
         
-        const hitTestResults = frame.getHitTestResults(this.hitTestSource);
-        
-        if (hitTestResults.length > 0 && !this.pokemon.visible) {
-            const hit = hitTestResults[0];
-            const pose = hit.getPose(this.xrReferenceSpace);
+        try {
+            const hitTestResults = frame.getHitTestResults(this.hitTestSource);
             
-            if (pose) {
-                this.pokemon.position.set(
-                    pose.transform.position.x,
-                    pose.transform.position.y,
-                    pose.transform.position.z
-                );
-                this.pokemon.visible = true;
-                this.updateStatus('Pokemon platziert! 🎉');
+            if (hitTestResults.length > 0) {
+                console.log(`${hitTestResults.length} Hit-Test-Ergebnisse`);
+                
+                const hit = hitTestResults[0];
+                const pose = hit.getPose(this.xrReferenceSpace);
+                
+                if (pose) {
+                    this.pokemon.position.set(
+                        pose.transform.position.x,
+                        pose.transform.position.y + 0.1,
+                        pose.transform.position.z
+                    );
+                    this.pokemon.userData.basePosition = this.pokemon.position.clone();
+                    this.pokemon.visible = true;
+                    this.updateStatus('Pokemon via Hit-Test platziert! 🎉');
+                    console.log('Pokemon via Hit-Test positioniert:', this.pokemon.position);
+                }
             }
+        } catch (error) {
+            console.warn('Hit-Test Fehler:', error);
         }
+    }
+    
+    placeOnDefaultPosition() {
+        const pose = this.camera.position.clone();
+        pose.y -= 0.5;
+        pose.z -= 1.0;
+        
+        this.pokemon.position.copy(pose);
+        this.pokemon.visible = true;
+        this.updateStatus('Pokemon auf Standardposition platziert! 🎉');
     }
     
     animatePokemon() {
@@ -239,13 +285,14 @@ class PokemonARApp {
         const wiggleX = Math.sin(this.animationTime * wiggleSpeed) * wiggleAmount;
         const wiggleZ = Math.cos(this.animationTime * wiggleSpeed * 1.3) * wiggleAmount * 0.5;
         
-        this.pokemon.position.x += wiggleX - (this.pokemon.userData.lastWiggleX || 0);
-        this.pokemon.position.y += bounceY - (this.pokemon.userData.lastBounceY || 0);
-        this.pokemon.position.z += wiggleZ - (this.pokemon.userData.lastWiggleZ || 0);
+        if (!this.pokemon.userData.basePosition) {
+            this.pokemon.userData.basePosition = this.pokemon.position.clone();
+        }
         
-        this.pokemon.userData.lastWiggleX = wiggleX;
-        this.pokemon.userData.lastBounceY = bounceY;
-        this.pokemon.userData.lastWiggleZ = wiggleZ;
+        this.pokemon.position.copy(this.pokemon.userData.basePosition);
+        this.pokemon.position.x += wiggleX;
+        this.pokemon.position.y += bounceY;
+        this.pokemon.position.z += wiggleZ;
         
         this.pokemon.rotation.y = Math.sin(this.animationTime * 0.8) * 0.1;
     }
