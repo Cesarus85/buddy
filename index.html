@@ -1,64 +1,106 @@
-<!DOCTYPE html>
-<html lang="de">
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pokemon AR Buddy</title>
-    <script src="https://unpkg.com/three@0.155.0/build/three.min.js"></script>
-    <script src="https://unpkg.com/three@0.155.0/examples/js/webxr/VRButton.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/webxr-polyfill@latest/build/webxr-polyfill.min.js"></script>
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: #000;
-            font-family: Arial, sans-serif;
-            overflow: hidden;
-        }
-        
-        #info {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            color: white;
-            z-index: 100;
-            background: rgba(0,0,0,0.5);
-            padding: 10px;
-            border-radius: 5px;
-        }
-        
-        #startButton {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            padding: 20px 40px;
-            font-size: 18px;
-            background: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            z-index: 100;
-        }
-        
-        #startButton:hover {
-            background: #45a049;
-        }
-        
-        canvas {
-            display: block;
-        }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pokémon-ähnliche WebXR-Anwendung</title>
+  <!-- A-Frame für WebXR -->
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+  <!-- AR.js für Ebenenerkennung -->
+  <script src="https://cdn.jsdelivr.net/gh/jeromeetienne/AR.js@2.3.1/aframe/build/aframe-ar.min.js"></script>
 </head>
 <body>
-    <div id="info">
-        <h3>Pokemon AR Buddy</h3>
-        <p>Status: <span id="status">Initialisierung...</span></p>
-    </div>
+  <a-scene
+    vr-mode-ui="enabled: false"
+    arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false;"
+    renderer="logarithmicDepthBuffer: true;">
     
-    <button id="startButton">AR starten</button>
-    
-    <script src="app.js"></script>
+    <!-- Passthrough für AR -->
+    <a-camera
+      gps-camera
+      rotation-reader
+      position="0 1.6 0">
+    </a-camera>
+
+    <!-- Ebene für die Platzierung der Figur -->
+    <a-entity
+      arjs-anchor="planeDetection: true;"
+      position="0 0 -2"
+      scale="0.5 0.5 0.5">
+      
+      <!-- Pokémon-ähnliche Figur (vereinfachtes 3D-Modell mit Kugel und Details) -->
+      <a-entity id="pokemon" position="0 0.5 0">
+        <!-- Körper (Kugel) -->
+        <a-sphere
+          radius="0.3"
+          color="#FF6347"
+          position="0 0 0">
+        </a-sphere>
+        <!-- Augen -->
+        <a-sphere
+          radius="0.05"
+          color="black"
+          position="-0.1 0.1 0.25">
+        </a-sphere>
+        <a-sphere
+          radius="0.05"
+          color="black"
+          position="0.1 0.1 0.25">
+        </a-sphere>
+        <!-- Animation für leichte Bewegung -->
+        <a-animation
+          attribute="position"
+          dur="2000"
+          from="0 0.5 0"
+          to="0.2 0.5 0"
+          direction="alternate"
+          repeat="indefinite">
+        </a-animation>
+      </a-entity>
+    </a-entity>
+
+    <!-- Licht für bessere Sichtbarkeit -->
+    <a-light type="ambient" intensity="0.5"></a-light>
+    <a-light type="directional" intensity="0.5" position="0 2 1"></a-light>
+  </a-scene>
 </body>
 </html>
