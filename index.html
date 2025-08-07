@@ -185,8 +185,8 @@ function onWindowResize() {
 function onSelect() {
     if (reticle.visible) {
         creature.position.setFromMatrixPosition(reticle.matrix);
-        // Kreatur etwas über dem Boden positionieren
-        creature.position.y += 0.15;
+        // Kreatur direkt auf Bodenhöhe positionieren (Füße berühren Boden)
+        creature.position.y -= 0.03; // Leicht nach unten, damit Füße den Boden berühren
         creature.visible = true;
     }
 }
