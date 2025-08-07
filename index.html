@@ -187,6 +187,10 @@ function onSelect() {
         creature.position.setFromMatrixPosition(reticle.matrix);
         // Kreatur direkt auf Bodenhöhe positionieren (Füße berühren Boden)
         creature.position.y -= 0.03; // Leicht nach unten, damit Füße den Boden berühren
+        
+        // Figur zur Kamera ausrichten
+        creature.lookAt(camera.position);
+        
         creature.visible = true;
     }
 }
