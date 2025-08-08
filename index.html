@@ -2,17 +2,17 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <title>WebXR AR – Pokémon Capture (Audio + Eye Fix + AR-Button sichtbar)</title>
+  <title>WebXR AR – Pokémon Capture (Multi-Kreaturen) – Fixes</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     html, body { margin:0; padding:0; overflow:hidden; background:transparent; font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
     #ui { position:fixed; inset:0; pointer-events:none; display:flex; align-items:flex-end; justify-content:center; padding:16px; }
     .hint { pointer-events:auto; background:rgba(0,0,0,.55); color:#fff; padding:10px 12px; border-radius:12px; font-size:14px; backdrop-filter: blur(6px); max-width:min(90vw,720px); }
-    .actions { position:fixed; top:12px; right:12px; display:flex; gap:8px; pointer-events:auto; z-index: 2000; }
+    .actions { position:fixed; top:12px; right:12px; display:flex; gap:8px; pointer-events:auto; }
     .btn { border:0; border-radius:10px; padding:8px 12px; font-size:14px; cursor:pointer; background:#111; color:#fff; opacity:.9; }
     .btn:active { transform: translateY(1px); }
     .hidden { display:none !important; }
-    .legend { position:fixed; left:12px; bottom:12px; font-size:12px; color:#fff; opacity:.75; pointer-events:auto; background:rgba(0,0,0,.45); padding:6px 8px; border-radius:8px; z-index: 2000; }
+    .legend { position:fixed; left:12px; bottom:12px; font-size:12px; color:#fff; opacity:.75; pointer-events:auto; background:rgba(0,0,0,.45); padding:6px 8px; border-radius:8px; }
   </style>
 </head>
 <body>
@@ -52,36 +52,6 @@ let captureState = null;
 let captureT = 0;
 let captureData = null;
 
-// ---------- SFX (WebAudio) ----------
-let actx = null;
-function ensureAudio() {
-  if (!actx) {
-    actx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  if (actx.state === 'suspended') actx.resume();
-}
-function tone({freq=440, dur=0.12, type='sine', gain=0.08, attack=0.005, decay=0.04}) {
-  if (!actx) return;
-  const t0 = actx.currentTime;
-  const osc = actx.createOscillator();
-  const g  = actx.createGain();
-  osc.type = type;
-  osc.frequency.value = freq;
-  g.gain.value = 0.0;
-  g.gain.linearRampToValueAtTime(gain, t0 + attack);
-  g.gain.linearRampToValueAtTime(0.0001, t0 + attack + decay + dur);
-  osc.connect(g).connect(actx.destination);
-  osc.start(t0);
-  osc.stop(t0 + attack + decay + dur + 0.02);
-}
-const SFX = {
-  place(){ tone({freq:660, type:'triangle', gain:0.09, attack:0.005, decay:0.05, dur:0.05}); },
-  throw(){ tone({freq:380, type:'sawtooth', gain:0.05, attack:0.003, decay:0.03, dur:0.06}); tone({freq:760, type:'sawtooth', gain:0.03, attack:0.003, decay:0.06, dur:0.08}); },
-  suck(){ tone({freq:880, type:'square', gain:0.06, attack:0.003, decay:0.12, dur:0.14}); },
-  bounce(){ tone({freq:240, type:'triangle', gain:0.07, attack:0.003, decay:0.06, dur:0.06}); },
-  jump(){ tone({freq:520, type:'square', gain:0.04, attack:0.003, decay:0.05, dur:0.05}); }
-};
-
 function lerpAngle(a, b, t) {
   let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
   return a + diff * t;
@@ -101,31 +71,12 @@ function init() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
 
-  // --- ARButton: nur 'hit-test' required, Rest optional ---
   const btn = ARButton.createButton(renderer, {
-    requiredFeatures: ['hit-test'],
-    optionalFeatures: ['plane-detection','dom-overlay','light-estimation'],
+    requiredFeatures: ['hit-test', 'plane-detection'],
+    optionalFeatures: ['dom-overlay','light-estimation'],
     domOverlay: { root: document.body }
   });
   document.body.appendChild(btn);
-  // Button sichtbar halten
-  btn.style.zIndex = '9999';
-  btn.style.position = 'fixed';
-  btn.style.top = '12px';
-  btn.style.left = '12px';
-
-  // Diagnose
-  if (!('xr' in navigator)) {
-    console.warn('WebXR nicht verfügbar (navigator.xr fehlt).');
-  } else {
-    navigator.xr.isSessionSupported('immersive-ar').then(supported => {
-      console.log('immersive-ar support:', supported);
-      if (!supported) {
-        document.getElementById('hint').textContent =
-          'AR wird hier nicht unterstützt (immersive-ar).';
-      }
-    }).catch(e => console.warn('isSessionSupported error:', e));
-  }
 
   // Lights
   hemiLight = new THREE.HemisphereLight(0xffffff, 0x666688, 0.9);
@@ -163,6 +114,7 @@ function init() {
   creatureVariants = [baseRed, pikaLike, turtleLike, lizardLike];
   for (const g of creatureVariants) {
     g.visible = false;
+    // FIX: initialScale pro Variante speichern
     g.userData.initialScale = g.scale.x;
     scene.add(g);
   }
@@ -179,12 +131,10 @@ function init() {
 
   // Controllers
   controller0 = renderer.xr.getController(0);
-  controller0.addEventListener('selectstart', ensureAudio); // AudioContext öffnen
   controller0.addEventListener('select', onSelectPrimary);
   scene.add(controller0);
 
   controller1 = renderer.xr.getController(1);
-  controller1.addEventListener('selectstart', ensureAudio);
   controller1.addEventListener('select', onSelectCapture);
   scene.add(controller1);
 
@@ -205,27 +155,15 @@ function init() {
 
 function onSessionStart() {
   const session = renderer.xr.getSession();
+  session.updateWorldTrackingState({ planeDetectionState: { enabled: true } });
+  session.addEventListener('planeadded', onPlaneAdded);
+  session.addEventListener('planeremoved', onPlaneRemoved);
+  session.addEventListener('planeupdated', onPlaneUpdated);
 
-  // Plane Detection nur aktivieren, wenn verfügbar
-  try {
-    if (session.updateWorldTrackingState) {
-      session.updateWorldTrackingState({ planeDetectionState: { enabled: true } });
-    }
-  } catch (e) {
-    console.warn('Plane detection enable failed (non-fatal):', e);
-  }
-
-  session.addEventListener?.('planeadded', onPlaneAdded);
-  session.addEventListener?.('planeremoved', onPlaneRemoved);
-  session.addEventListener?.('planeupdated', onPlaneUpdated);
-
-  // Light Estimation (optional)
   try {
     if (session.requestLightProbe) {
       xrGlBinding = new XRWebGLBinding(session, renderer.getContext());
-      session.requestLightProbe({}).then(lp => {
-        xrLightProbe = lp;
-      }).catch(()=>{ xrLightProbe = null; });
+      session.requestLightProbe({}).then(lp => xrLightProbe = lp).catch(()=>{ xrLightProbe = null; });
     }
   } catch { xrLightProbe = null; }
 
@@ -239,12 +177,14 @@ function onWindowResize() {
 }
 
 /* ========================== CREATURES ========================== */
+// Standard-Anim-Setup + Basishöhen & initialScale
 function withStandardAnimData(group, extras = {}) {
   const head = extras.head;
   const body = extras.body;
   group.userData = {
     ...extras,
     footBaseY: extras.footBaseY ?? 0.03,
+    // FIX: Basishöhen einmalig speichern
     headBaseY: head ? head.position.y : 0,
     bodyBaseY: body ? body.position.y : 0.12,
     initialScale: group.scale.x,
@@ -257,34 +197,34 @@ function withStandardAnimData(group, extras = {}) {
 function buildBaseRed() {
   const g = new THREE.Group();
 
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.12, 20, 20),
-    new THREE.MeshStandardMaterial({ color: 0xff6b6b, roughness:0.35, metalness:0.05 }));
+  const body = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 20, 20),
+    new THREE.MeshStandardMaterial({ color: 0xff6b6b, roughness:0.35, metalness:0.05 })
+  );
   body.castShadow = true; body.position.y = 0.12;
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.08, 20, 20),
-    new THREE.MeshStandardMaterial({ color: 0xff8e8e, roughness:0.25, metalness:0.1 }));
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.08, 20, 20),
+    new THREE.MeshStandardMaterial({ color: 0xff8e8e, roughness:0.25, metalness:0.1 })
+  );
   head.castShadow = true; head.position.set(0,0.28,0);
 
-  // Augen + Lider (sichtbar vor dem Kopf)
   const eyeGeom = new THREE.SphereGeometry(0.025, 12, 12);
   const eyeMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness:0.4, metalness:0.3 });
-  eyeMat.depthWrite = false; // wichtig
-  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.03, 0.30, 0.072); eye1.castShadow = false; eye1.renderOrder = 10;
+  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.03, 0.3, 0.07); eye1.castShadow = true;
   const eye2 = eye1.clone(); eye2.position.x = 0.03;
 
-  const eyelidGeom = new THREE.SphereGeometry(0.026, 12, 6, 0, Math.PI*2, 0, Math.PI*0.5);
+  const eyelidGeom = new THREE.SphereGeometry(0.026, 12, 6, 0, Math.PI * 2, 0, Math.PI * 0.5);
   const eyelidMat = new THREE.MeshStandardMaterial({ color: 0xff8e8e });
-  eyelidMat.depthWrite = false;
-  const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0; eyelid1.renderOrder = 12;
+  const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
   const eyelid2 = eyelid1.clone(); eyelid2.position.copy(eye2.position); eyelid2.position.y += 0.01;
 
   const nose = new THREE.Mesh(new THREE.ConeGeometry(0.015, 0.03, 8), new THREE.MeshStandardMaterial({ color: 0xff4757 }));
-  nose.position.set(0,0.28,0.085); nose.rotation.x = Math.PI/2; nose.castShadow = true; nose.renderOrder = 11;
+  nose.position.set(0,0.28,0.08); nose.rotation.x = Math.PI/2; nose.castShadow = true;
 
   const cheekGeom = new THREE.CircleGeometry(0.02, 16);
   const cheekMat = new THREE.MeshStandardMaterial({ color: 0xff3838, transparent:true, opacity:0.8 });
-  cheekMat.depthWrite = false;
-  const cheek1 = new THREE.Mesh(cheekGeom, cheekMat); cheek1.position.set(-0.06,0.26,0.062); cheek1.renderOrder = 11;
+  const cheek1 = new THREE.Mesh(cheekGeom, cheekMat); cheek1.position.set(-0.06,0.26,0.06);
   const cheek2 = cheek1.clone(); cheek2.position.x = 0.06;
 
   const footGeom = new THREE.SphereGeometry(0.03, 12, 12);
@@ -317,19 +257,17 @@ function buildPikaLike() {
 
   const eyeGeom = new THREE.SphereGeometry(0.022, 12, 12);
   const eyeMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
-  eyeMat.depthWrite = false;
-  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.03, 0.29, 0.072); eye1.renderOrder = 10;
+  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.03, 0.29, 0.065); eye1.castShadow = true;
   const eye2 = eye1.clone(); eye2.position.x = 0.03;
 
   const eyelidGeom = new THREE.SphereGeometry(0.024, 12, 6, 0, Math.PI*2, 0, Math.PI*0.5);
   const eyelidMat = new THREE.MeshStandardMaterial({ color: yellow });
-  eyelidMat.depthWrite = false;
-  const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0; eyelid1.renderOrder = 12;
+  const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
   const eyelid2 = eyelid1.clone(); eyelid2.position.copy(eye2.position); eyelid2.position.y += 0.01;
 
   const cheekGeom = new THREE.CircleGeometry(0.02, 16);
-  const cheekMat = new THREE.MeshStandardMaterial({ color: 0xff4141, transparent:true, opacity:0.9 }); cheekMat.depthWrite = false;
-  const cheek1 = new THREE.Mesh(cheekGeom, cheekMat); cheek1.position.set(-0.055,0.255,0.06); cheek1.renderOrder = 11;
+  const cheekMat = new THREE.MeshStandardMaterial({ color: 0xff4141, transparent:true, opacity:0.9 });
+  const cheek1 = new THREE.Mesh(cheekGeom, cheekMat); cheek1.position.set(-0.055,0.255,0.055);
   const cheek2 = cheek1.clone(); cheek2.position.x = 0.055;
 
   const footGeom = new THREE.SphereGeometry(0.028, 12, 12);
@@ -371,7 +309,7 @@ function buildPikaLike() {
   return withStandardAnimData(g, { body, head, eyes:[eye1,eye2], eyelids:[eyelid1,eyelid2], ears:[ear1,ear2], tail, feet:[foot1,foot2] });
 }
 
-/* --------- Schiggy-ähnlich (mit Eye-Fix) ---------- */
+/* --------- Schiggy-ähnlich ---------- */
 function buildTurtleLike() {
   const g = new THREE.Group();
   const blue = 0x6ec6ff, shellBrown = 0x8b5a2b, shellRing = 0xf3e2b4;
@@ -382,17 +320,14 @@ function buildTurtleLike() {
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.085, 20, 20), new THREE.MeshStandardMaterial({ color: blue, roughness:0.3 }));
   head.castShadow = true; head.position.set(0,0.26,0.02);
 
-  // --- EYES: etwas weiter vorne + depthWrite aus + renderOrder hoch ---
   const eyeGeom = new THREE.SphereGeometry(0.022, 12, 12);
   const eyeMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
-  eyeMat.depthWrite = false;
-  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.03, 0.285, 0.078); eye1.castShadow = false; eye1.renderOrder = 10;
+  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.03, 0.28, 0.065); eye1.castShadow = true;
   const eye2 = eye1.clone(); eye2.position.x = 0.03;
 
   const eyelidGeom = new THREE.SphereGeometry(0.024, 12, 6, 0, Math.PI*2, 0, Math.PI*0.5);
   const eyelidMat = new THREE.MeshStandardMaterial({ color: blue });
-  eyelidMat.depthWrite = false;
-  const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0; eyelid1.renderOrder = 12;
+  const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
   const eyelid2 = eyelid1.clone(); eyelid2.position.copy(eye2.position); eyelid2.position.y += 0.01;
 
   const shell = new THREE.Group();
@@ -437,14 +372,12 @@ function buildLizardLike() {
 
   const eyeGeom = new THREE.SphereGeometry(0.024, 12, 12);
   const eyeMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
-  eyeMat.depthWrite = false;
-  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.033, 0.31, 0.078); eye1.renderOrder = 10;
+  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.033, 0.31, 0.07); eye1.castShadow = true;
   const eye2 = eye1.clone(); eye2.position.x = 0.033;
 
   const eyelidGeom = new THREE.SphereGeometry(0.026, 12, 6, 0, Math.PI*2, 0, Math.PI*0.5);
   const eyelidMat = new THREE.MeshStandardMaterial({ color: orange });
-  eyelidMat.depthWrite = false;
-  const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0; eyelid1.renderOrder = 12;
+  const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
   const eyelid2 = eyelid1.clone(); eyelid2.position.copy(eye2.position); eyelid2.position.y += 0.01;
 
   const earMat = new THREE.MeshStandardMaterial({ color: orange });
@@ -550,26 +483,20 @@ function showActions(show){ document.getElementById('actions').classList.toggle(
 
 /* --------- Controller primary (place / jump) ---------- */
 function onSelectPrimary() {
-  ensureAudio();
   if (reticle.visible || placingMode) {
     const idx = Math.floor(Math.random() * creatureVariants.length);
     creature = creatureVariants[idx];
     for (const g of creatureVariants){ if (g !== creature) g.visible = false; }
-    placeCreatureAtReticle();
-    SFX.place();
+    placeCreatureAtReticle();       // FIX: setzt Scale/State zurück
     placingMode = false;
     return;
   }
-  if (creature.visible && !isCaptured) {
-    triggerJump();
-    SFX.jump();
-  }
+  if (creature.visible && !isCaptured) triggerJump();
 }
 
 /* --------- Controller secondary (capture) ---------- */
 function onSelectCapture() {
-  ensureAudio();
-  if (!creature || !creature.visible || isCaptured || captureState) return;
+  if (!creature || !creature.visible || isCaptured || captureState) return; // FIX: harte Guards
 
   const start = new THREE.Vector3();
   controller1.getWorldPosition(start);
@@ -590,7 +517,6 @@ function onSelectCapture() {
   captureState = 'fly';
   captureT = 0;
   captureData = { start, mid, target, groundY, velY: 0, duration: 0.6 };
-  SFX.throw();
   showHint("Poké-Kugel geworfen!", 1200);
 }
 
@@ -598,6 +524,7 @@ function onSelectCapture() {
 function placeCreatureAtReticle(){
   if (!reticle.visible) { showHint("Kein Ziel gefunden – bewege dich etwas.", 2000); return; }
 
+  // FIX: Scale immer auf initialScale zurücksetzen
   const initScale = creature.userData.initialScale ?? 1;
   creature.scale.set(initScale, initScale, initScale);
 
@@ -605,10 +532,14 @@ function placeCreatureAtReticle(){
   creature.position.y -= 0.03;
   creature.rotation.set(0, 0, 0);
 
+  // FIX: Animation/Capture State zurücksetzen
   creature.userData.animationState = { breathPhase:0, blinkTimer:0, headBobPhase:0, tailWagPhase:0, jumpPhase:0, jumping:false, walkPhase:0 };
   isCaptured = false;
-  captureState = null; captureT = 0; captureData = null;
+  captureState = null;
+  captureT = 0;
+  captureData = null;
 
+  // FIX: Augenlider wieder offen
   if (creature.userData.eyelids) for (const lid of creature.userData.eyelids) lid.scale.y = 0;
 
   shadowPlane.position.copy(creature.position);
@@ -623,11 +554,13 @@ function placeCreatureAtReticle(){
 function removeCreature(){
   for (const g of creatureVariants) {
     g.visible = false;
+    // FIX: auch hier Scale sauber resetten
     const s = g.userData.initialScale ?? 1;
     g.scale.set(s,s,s);
   }
   shadowPlane.visible = false;
 
+  // FIX: Capture-Aufräumen
   isCaptured = false;
   captureState = null;
   captureT = 0;
@@ -700,6 +633,7 @@ function render(timestamp, frame) {
     const ud = creature.userData;
     const st = ud.animationState;
 
+    // zur Kamera drehen (Yaw)
     const toCam = tmpVec3.subVectors(camera.position, creature.position);
     toCam.y = 0;
     let turnSpeed = 0;
@@ -710,6 +644,7 @@ function render(timestamp, frame) {
       turnSpeed = Math.min(1, Math.abs(diff) / 0.4);
     }
 
+    // Trippeln beim Drehen
     if (ud.feet && ud.feet.length && turnSpeed > 0.05) {
       st.walkPhase += (3.5 + 6.0 * turnSpeed) * dt;
       const amp = 0.012 + 0.01 * turnSpeed;
@@ -718,23 +653,29 @@ function render(timestamp, frame) {
       const liftR = Math.max(0, Math.sin(st.walkPhase + Math.PI));
       ud.feet[0].position.y = base + liftL * amp;
       ud.feet[1].position.y = base + liftR * amp;
+      // FIX: Körper-Höhe relativ zur Basis
       ud.body.position.y = ud.bodyBaseY + (liftL + liftR) * 0.004;
     } else if (ud.feet && ud.feet.length){
+      // FIX: sanft zur Basis zurück
       ud.feet[0].position.y += (ud.footBaseY - ud.feet[0].position.y) * Math.min(1, 8*dt);
       ud.feet[1].position.y += (ud.footBaseY - ud.feet[1].position.y) * Math.min(1, 8*dt);
       ud.body.position.y += (ud.bodyBaseY - ud.body.position.y) * Math.min(1, 8*dt);
     }
 
+    // Atmung (Skalierung ok)
     st.breathPhase += 0.02;
     const breathScale = 1 + Math.sin(st.breathPhase) * 0.03;
     ud.body.scale.set(breathScale, breathScale, breathScale);
 
+    // Kopf-Idle
     st.headBobPhase += 0.015;
     if (ud.head){
       ud.head.rotation.y = Math.sin(st.headBobPhase) * 0.1;
+      // FIX: kein += mehr → relative Modulation um headBaseY
       ud.head.position.y = ud.headBaseY + Math.sin(st.headBobPhase * 1.5) * 0.005;
     }
 
+    // Blinzeln
     st.blinkTimer += 0.016;
     if (st.blinkTimer > 3 + Math.random() * 2 && ud.eyelids) {
       st.blinkTimer = 0;
@@ -744,6 +685,7 @@ function render(timestamp, frame) {
       });
     }
 
+    // Ohren
     if (ud.ears && ud.ears.length === 2){
       if (Math.sin(st.headBobPhase * 0.7) > 0.95) {
         ud.ears[0].rotation.z = (ud.ears[0].rotation.z ?? -0.3) + Math.sin(timestamp/100) * 0.2;
@@ -751,12 +693,14 @@ function render(timestamp, frame) {
       }
     }
 
+    // Schwanz
     if (ud.tail){
       st.tailWagPhase += 0.08;
       ud.tail.rotation.x = (ud.tail.rotation.x ?? Math.PI/4) + Math.sin(st.tailWagPhase) * 0.3;
       ud.tail.rotation.y = Math.sin(st.tailWagPhase * 1.2) * 0.4;
     }
 
+    // Hüpfen
     if (st.jumping) {
       st.jumpPhase += 0.12;
       const y = Math.sin(st.jumpPhase) * 0.12;
@@ -771,6 +715,7 @@ function render(timestamp, frame) {
       shadowPlane.scale.lerp(tmpVec3.set(1,1,1), 0.2);
     }
 
+    // Schatten folgt
     shadowPlane.position.x = creature.position.x;
     shadowPlane.position.z = creature.position.z;
   }
@@ -796,7 +741,7 @@ function render(timestamp, frame) {
     else if (captureState === 'hover') {
       captureT += dtLocal;
       pokeBall.position.y = captureData.target.y + Math.sin(captureT*6.0)*0.02;
-      if (captureT > 0.35) { captureState = 'suck'; captureT = 0; SFX.suck(); }
+      if (captureT > 0.35) { captureState = 'suck'; captureT = 0; }
     }
     else if (captureState === 'suck') {
       if (creature && creature.visible) {
@@ -805,6 +750,7 @@ function render(timestamp, frame) {
         creature.position.lerp(pokeBall.position, 0.18);
         creature.rotation.y += 0.35;
         const s = 1 - t;
+        // FIX: skaliere relativ zu initialScale
         const init = creature.userData.initialScale ?? 1;
         creature.scale.setScalar(Math.max(0, s) * init);
         if (t >= 1) {
@@ -830,7 +776,6 @@ function render(timestamp, frame) {
         pokeBall.position.y = captureData.groundY + 0.03;
         if (Math.abs(captureData.velY) > 0.6) {
           captureData.velY *= -0.35;
-          SFX.bounce();
         } else {
           pokeBall.visible = false;
           captureState = null;
@@ -851,12 +796,6 @@ function render(timestamp, frame) {
 
   renderer.render(scene, camera);
 }
-
-/* ---------- Plane events ---------- */
-function onPlaneAdded(e){ const mesh = createPlaneMesh(e.plane); planeMeshes.set(e.plane, mesh); scene.add(mesh); lastPlaneSeenAt = performance.now(); }
-function onPlaneUpdated(e){ const mesh = planeMeshes.get(e.plane); if (mesh) updatePlaneMesh(mesh, e.plane); lastPlaneSeenAt = performance.now(); }
-function onPlaneRemoved(e){ const mesh = planeMeshes.get(e.plane); if (mesh){ scene.remove(mesh); planeMeshes.delete(e.plane); } }
-
 </script>
 </body>
 </html>
