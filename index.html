@@ -2,17 +2,17 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <title>WebXR AR – Pokémon Capture (Audio + Eye Fix)</title>
+  <title>WebXR AR – Pokémon Capture (Audio + Eye Fix + AR-Button sichtbar)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     html, body { margin:0; padding:0; overflow:hidden; background:transparent; font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
     #ui { position:fixed; inset:0; pointer-events:none; display:flex; align-items:flex-end; justify-content:center; padding:16px; }
     .hint { pointer-events:auto; background:rgba(0,0,0,.55); color:#fff; padding:10px 12px; border-radius:12px; font-size:14px; backdrop-filter: blur(6px); max-width:min(90vw,720px); }
-    .actions { position:fixed; top:12px; right:12px; display:flex; gap:8px; pointer-events:auto; }
+    .actions { position:fixed; top:12px; right:12px; display:flex; gap:8px; pointer-events:auto; z-index: 2000; }
     .btn { border:0; border-radius:10px; padding:8px 12px; font-size:14px; cursor:pointer; background:#111; color:#fff; opacity:.9; }
     .btn:active { transform: translateY(1px); }
     .hidden { display:none !important; }
-    .legend { position:fixed; left:12px; bottom:12px; font-size:12px; color:#fff; opacity:.75; pointer-events:auto; background:rgba(0,0,0,.45); padding:6px 8px; border-radius:8px; }
+    .legend { position:fixed; left:12px; bottom:12px; font-size:12px; color:#fff; opacity:.75; pointer-events:auto; background:rgba(0,0,0,.45); padding:6px 8px; border-radius:8px; z-index: 2000; }
   </style>
 </head>
 <body>
@@ -101,12 +101,31 @@ function init() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
 
+  // --- ARButton: nur 'hit-test' required, Rest optional ---
   const btn = ARButton.createButton(renderer, {
-    requiredFeatures: ['hit-test', 'plane-detection'],
-    optionalFeatures: ['dom-overlay','light-estimation'],
+    requiredFeatures: ['hit-test'],
+    optionalFeatures: ['plane-detection','dom-overlay','light-estimation'],
     domOverlay: { root: document.body }
   });
   document.body.appendChild(btn);
+  // Button sichtbar halten
+  btn.style.zIndex = '9999';
+  btn.style.position = 'fixed';
+  btn.style.top = '12px';
+  btn.style.left = '12px';
+
+  // Diagnose
+  if (!('xr' in navigator)) {
+    console.warn('WebXR nicht verfügbar (navigator.xr fehlt).');
+  } else {
+    navigator.xr.isSessionSupported('immersive-ar').then(supported => {
+      console.log('immersive-ar support:', supported);
+      if (!supported) {
+        document.getElementById('hint').textContent =
+          'AR wird hier nicht unterstützt (immersive-ar).';
+      }
+    }).catch(e => console.warn('isSessionSupported error:', e));
+  }
 
   // Lights
   hemiLight = new THREE.HemisphereLight(0xffffff, 0x666688, 0.9);
@@ -186,15 +205,27 @@ function init() {
 
 function onSessionStart() {
   const session = renderer.xr.getSession();
-  session.updateWorldTrackingState({ planeDetectionState: { enabled: true } });
-  session.addEventListener('planeadded', onPlaneAdded);
-  session.addEventListener('planeremoved', onPlaneRemoved);
-  session.addEventListener('planeupdated', onPlaneUpdated);
 
+  // Plane Detection nur aktivieren, wenn verfügbar
+  try {
+    if (session.updateWorldTrackingState) {
+      session.updateWorldTrackingState({ planeDetectionState: { enabled: true } });
+    }
+  } catch (e) {
+    console.warn('Plane detection enable failed (non-fatal):', e);
+  }
+
+  session.addEventListener?.('planeadded', onPlaneAdded);
+  session.addEventListener?.('planeremoved', onPlaneRemoved);
+  session.addEventListener?.('planeupdated', onPlaneUpdated);
+
+  // Light Estimation (optional)
   try {
     if (session.requestLightProbe) {
       xrGlBinding = new XRWebGLBinding(session, renderer.getContext());
-      session.requestLightProbe({}).then(lp => xrLightProbe = lp).catch(()=>{ xrLightProbe = null; });
+      session.requestLightProbe({}).then(lp => {
+        xrLightProbe = lp;
+      }).catch(()=>{ xrLightProbe = null; });
     }
   } catch { xrLightProbe = null; }
 
