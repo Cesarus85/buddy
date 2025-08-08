@@ -2,20 +2,24 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <title>WebXR AR – Creature + Planes + Sound & Particles</title>
+  <title>WebXR AR – Creature + Sound & Particles (Plane optional)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     html, body { margin:0; height:100%; overflow:hidden; background:#000; }
-    #hint {
+    #hint, #status {
       position: fixed; left: 50%; transform: translateX(-50%);
-      bottom: 16px; padding: 8px 12px; border-radius: 8px;
-      background: rgba(0,0,0,0.55); color:#fff; font-family: system-ui, sans-serif;
+      padding: 8px 12px; border-radius: 8px; font-family: system-ui, sans-serif;
       font-size: 14px; letter-spacing: .2px; backdrop-filter: blur(6px);
-      user-select: none; pointer-events:none; opacity:.9;
+      user-select: none; color:#fff;
     }
+    #hint { bottom: 16px; background: rgba(0,0,0,0.55); opacity:.9; }
+    #status { top: 12px; background: rgba(0,0,0,0.45); opacity:.85; }
+    .ok { color: #9cff9c; }
+    .warn { color: #ffd27a; }
   </style>
 </head>
 <body>
+<div id="status">Status: Initialisiert…</div>
 <div id="hint">Ziele auf eine horizontale Fläche und tippe, um zu platzieren. Erneut tippen = umplatzieren.</div>
 
 <script type="module">
@@ -41,11 +45,14 @@ let plopBuffer = null;
 // Partikel
 const bursts = []; // { points, material, velocities: Float32Array, life: number }
 
+// Plane-Detection verfügbar?
+let planeDetectionActive = false;
+const $status = document.getElementById('status');
+
 init();
 
 async function init() {
   scene = new THREE.Scene();
-
   camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 30);
 
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
@@ -57,22 +64,21 @@ async function init() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
 
-  // AR-Button mit Plane Detection
+  // 👉 Wichtig: plane-detection nur optional
   const btn = ARButton.createButton(renderer, {
-    requiredFeatures: ['hit-test', 'plane-detection'],
-    optionalFeatures: ['dom-overlay'],
+    requiredFeatures: ['hit-test'],
+    optionalFeatures: ['plane-detection', 'dom-overlay'],
     domOverlay: { root: document.body }
   });
   document.body.appendChild(btn);
 
-  // Environment (für realistischere Reflexionen)
+  // Environment
   envPMREM = new THREE.PMREMGenerator(renderer);
   scene.environment = envPMREM.fromScene(new RoomEnvironment(), 0.05).texture;
 
-  // Licht-Setup
+  // Licht
   const hemi = new THREE.HemisphereLight(0xffffff, 0x666688, 0.75);
   scene.add(hemi);
-
   const dir = new THREE.DirectionalLight(0xffffff, 0.9);
   dir.position.set(0.5, 1.2, 0.8);
   dir.castShadow = true;
@@ -81,7 +87,7 @@ async function init() {
   dir.shadow.camera.far = 10;
   scene.add(dir);
 
-  // Reticle (sanft animiert)
+  // Reticle (animiert)
   reticle = new THREE.Group();
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.12, 0.16, 48).rotateX(-Math.PI/2),
@@ -96,36 +102,64 @@ async function init() {
   reticle.visible = false;
   scene.add(reticle);
 
-  // Kreatur bauen
+  // Kreatur
   creature = buildCreature();
   creature.visible = false;
   scene.add(creature);
 
-  // Audio vorbereiten
+  // Audio (prozedural)
   listener = new THREE.AudioListener();
   camera.add(listener);
-  plopBuffer = await createPlopBuffer(listener.context); // prozeduraler „Plopp“
+  plopBuffer = await createPlopBuffer(listener.context);
 
   controller = renderer.xr.getController(0);
   controller.addEventListener('select', onSelect);
   scene.add(controller);
 
-  // Session Events (Planes)
+  // Session Events
   renderer.xr.addEventListener('sessionstart', () => {
     const session = renderer.xr.getSession();
 
-    // Plane Detection aktivieren (Quest 3 / HorizonOS)
-    if (session.updateWorldTrackingState) {
-      session.updateWorldTrackingState({ planeDetectionState: { enabled: true } });
+    // Versuche Plane-Detection zu aktivieren, falls unterstützt
+    planeDetectionActive = false;
+    try {
+      if (session.updateWorldTrackingState) {
+        session.updateWorldTrackingState({ planeDetectionState: { enabled: true } });
+        // Events nur registrieren, wenn Funktionen existieren
+        if (typeof session.addEventListener === 'function') {
+          session.addEventListener('planeadded', onPlaneAdded);
+          session.addEventListener('planeremoved', onPlaneRemoved);
+          session.addEventListener('planeupdated', onPlaneUpdated);
+          planeDetectionActive = true;
+        }
+      }
+    } catch (e) {
+      // Ignorieren – Feature fehlt
+      planeDetectionActive = false;
     }
 
-    session.addEventListener('planeadded', onPlaneAdded);
-    session.addEventListener('planeremoved', onPlaneRemoved);
-    session.addEventListener('planeupdated', onPlaneUpdated);
+    updateStatus();
   });
+
+  renderer.xr.addEventListener('sessionend', () => {
+    planeDetectionActive = false;
+    updateStatus();
+  });
+
+  updateStatus();
 
   window.addEventListener('resize', onWindowResize);
   renderer.setAnimationLoop(render);
+}
+
+function updateStatus() {
+  if (!navigator.xr) {
+    $status.innerHTML = 'Status: <span class="warn">Kein WebXR verfügbar</span>';
+    return;
+  }
+  $status.innerHTML = planeDetectionActive
+    ? 'Status: <span class="ok">AR aktiv · Plane-Detection verfügbar</span>'
+    : 'Status: <span class="warn">AR aktiv · Plane-Detection nicht verfügbar (Fallback)</span>';
 }
 
 function buildCreature() {
@@ -134,8 +168,7 @@ function buildCreature() {
   const body = new THREE.Mesh(
     new THREE.SphereGeometry(0.12, 24, 24),
     new THREE.MeshPhysicalMaterial({
-      color: 0xff6b6b, roughness: 0.35, metalness: 0.1,
-      clearcoat: 0.4, clearcoatRoughness: 0.25
+      color: 0xff6b6b, roughness: 0.35, metalness: 0.1, clearcoat: 0.4, clearcoatRoughness: 0.25
     })
   );
   body.castShadow = true; body.receiveShadow = true;
@@ -153,32 +186,27 @@ function buildCreature() {
   const eye1 = new THREE.Mesh(eyeGeo, eyeMat); eye1.position.set(-0.03, 0.305, 0.073);
   const eye2 = eye1.clone(); eye2.position.x = 0.03;
 
-  // Augen-Glanzpunkt
   const glintGeo = new THREE.SphereGeometry(0.006, 10, 10);
   const glintMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
   const gl1 = new THREE.Mesh(glintGeo, glintMat); gl1.position.set(-0.038, 0.315, 0.087);
   const gl2 = gl1.clone(); gl2.position.x = 0.022;
 
-  // Wangen
   const cheekGeo = new THREE.CircleGeometry(0.02, 16);
   const cheekMat = new THREE.MeshBasicMaterial({ color: 0xff3a3a, transparent:true, opacity:0.85 });
   const cheek1 = new THREE.Mesh(cheekGeo, cheekMat); cheek1.position.set(-0.06, 0.262, 0.058); cheek1.lookAt(0,0.28,1);
   const cheek2 = cheek1.clone(); cheek2.position.x = 0.06;
 
-  // Füße
   const footGeo = new THREE.SphereGeometry(0.03, 16, 16);
   const footMat = new THREE.MeshPhysicalMaterial({ color: 0xc44569, roughness:0.6, metalness:0.05 });
   const foot1 = new THREE.Mesh(footGeo, footMat); foot1.position.set(-0.06, 0.03, 0.02);
   const foot2 = foot1.clone(); foot2.position.x = 0.06;
   foot1.castShadow = foot2.castShadow = true;
 
-  // Ohren
   const earGeo = new THREE.ConeGeometry(0.02, 0.065, 12);
   const earMat = new THREE.MeshPhysicalMaterial({ color: 0xff6b6b, roughness:0.35 });
   const ear1 = new THREE.Mesh(earGeo, earMat); ear1.position.set(-0.05, 0.355, -0.02); ear1.rotation.z = -0.3;
   const ear2 = ear1.clone(); ear2.position.x = 0.05; ear2.rotation.z = 0.3;
 
-  // Schwanz
   const tail = new THREE.Mesh(
     new THREE.ConeGeometry(0.02, 0.085, 12),
     new THREE.MeshPhysicalMaterial({ color: 0xff6b6b })
@@ -186,7 +214,6 @@ function buildCreature() {
   tail.position.set(0, 0.15, -0.1); tail.rotation.x = Math.PI/4;
   tail.castShadow = true;
 
-  // Augenlider (zum Blinzeln)
   const eyelidGeo = new THREE.SphereGeometry(0.026, 12, 6, 0, Math.PI*2, 0, Math.PI*0.5);
   const eyelidMat = new THREE.MeshStandardMaterial({ color: 0xff8e8e });
   const eyelid1 = new THREE.Mesh(eyelidGeo, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
@@ -209,14 +236,13 @@ function onWindowResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-// Triangle-Fan-Indexe für konvexe Polygone
 function triangleFanIndices(n) {
   const idx = [];
   for (let i = 1; i < n - 1; i++) idx.push(0, i, i + 1);
   return idx;
 }
 
-// ---------- Plane Mesh Handling ----------
+// ---------- Plane Mesh Handling (nur wenn verfügbar) ----------
 function createPlaneMesh(plane) {
   const n = plane.polygon.length;
   const positions = new Float32Array(n * 3);
@@ -229,13 +255,11 @@ function createPlaneMesh(plane) {
   geom.setIndex(triangleFanIndices(n));
   geom.computeVertexNormals();
 
-  // halbtransparentes Grid
   const material = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent:true, opacity:0.18, side:THREE.DoubleSide });
   const mesh = new THREE.Mesh(geom, material);
-  mesh.renderOrder = -1; // hinter Creature
+  mesh.renderOrder = -1;
   return mesh;
 }
-
 function updatePlaneMesh(mesh, plane) {
   const n = plane.polygon.length;
   const arr = mesh.geometry.attributes.position.array;
@@ -248,25 +272,24 @@ function updatePlaneMesh(mesh, plane) {
   mesh.geometry.attributes.position.needsUpdate = true;
   mesh.geometry.computeVertexNormals();
 }
-
 function onPlaneAdded(e) {
+  if (!planeDetectionActive) return;
   const plane = e.plane;
   const mesh = createPlaneMesh(plane);
   planeMeshes.set(plane, mesh);
   scene.add(mesh);
 }
 function onPlaneUpdated(e) {
+  if (!planeDetectionActive) return;
   const plane = e.plane;
   const mesh = planeMeshes.get(plane);
   if (mesh) updatePlaneMesh(mesh, plane);
 }
 function onPlaneRemoved(e) {
+  if (!planeDetectionActive) return;
   const plane = e.plane;
   const mesh = planeMeshes.get(plane);
-  if (mesh) {
-    scene.remove(mesh);
-    planeMeshes.delete(plane);
-  }
+  if (mesh) { scene.remove(mesh); planeMeshes.delete(plane); }
 }
 
 // ---------- Placement ----------
@@ -274,9 +297,8 @@ function onSelect() {
   if (!reticle.visible) return;
 
   const target = new THREE.Vector3().setFromMatrixPosition(reticle.matrix);
-  target.y -= 0.03; // Füße an Boden
+  target.y -= 0.03;
 
-  // Effekt & Sound am Zielort
   spawnBurst(target);
   playPlopAt(target);
 
@@ -285,31 +307,28 @@ function onSelect() {
     creature.lookAt(camera.position.x, creature.position.y, camera.position.z);
     creature.visible = true;
   } else {
-    creature.userData.moveTarget = target.clone(); // sanftes Umplatzieren
+    creature.userData.moveTarget = target.clone();
   }
 }
 
 // ---------- Audio ----------
 async function createPlopBuffer(audioCtx) {
-  // kurzer percussiver „Plopp“: Sinus mit schnellem Pitch-Down + Exponential-Decay
   const duration = 0.18;
   const sampleRate = audioCtx.sampleRate;
   const frameCount = Math.floor(duration * sampleRate);
   const buffer = audioCtx.createBuffer(1, frameCount, sampleRate);
   const data = buffer.getChannelData(0);
 
-  const startFreq = 900;   // Hz
-  const endFreq   = 220;   // Hz
+  const startFreq = 900;
+  const endFreq   = 220;
   for (let i=0; i<frameCount; i++) {
     const t = i / sampleRate;
-    // exponentieller Pitch-Down
     const f = endFreq + (startFreq - endFreq) * Math.pow(1 - t/duration, 3);
-    const env = Math.exp(-12 * t); // schneller Decay
+    const env = Math.exp(-12 * t);
     data[i] = Math.sin(2 * Math.PI * f * t) * env * 0.6;
   }
   return buffer;
 }
-
 function playPlopAt(positionVec3) {
   if (!plopBuffer) return;
   const sound = new THREE.PositionalAudio(listener);
@@ -323,69 +342,49 @@ function playPlopAt(positionVec3) {
   scene.add(dummy);
   dummy.add(sound);
   sound.play();
-  // nach Abspiel entfernen
   setTimeout(()=> { scene.remove(dummy); }, 400);
 }
 
 // ---------- Partikel ----------
 function spawnBurst(center) {
-  const COUNT = 80;            // Partikelanzahl
-  const SPEED = 0.6;           // Startgeschwindigkeit
-  const LIFE  = 0.7;           // Lebenszeit (Sek.)
-  const SIZE  = 0.02;          // Punktgröße
-
+  const COUNT = 80, SPEED = 0.6, LIFE = 0.7, SIZE = 0.02;
   const geom = new THREE.BufferGeometry();
   const pos  = new Float32Array(COUNT * 3);
   const col  = new Float32Array(COUNT * 3);
   const vel  = new Float32Array(COUNT * 3);
 
   for (let i=0; i<COUNT; i++) {
-    // Kugelverteilung
-    const u = Math.random();
-    const v = Math.random();
+    const u = Math.random(), v = Math.random();
     const theta = 2 * Math.PI * u;
     const phi   = Math.acos(2*v - 1);
-    const r     = Math.random() * 0.02; // Startstreuung
-
+    const r     = Math.random() * 0.02;
     const dx = Math.sin(phi) * Math.cos(theta);
     const dy = Math.cos(phi);
     const dz = Math.sin(phi) * Math.sin(theta);
 
-    // Position
     pos[i*3]   = center.x + dx * r;
     pos[i*3+1] = center.y + dy * r + 0.02;
     pos[i*3+2] = center.z + dz * r;
 
-    // Geschwindigkeit
     const s = SPEED * (0.4 + Math.random()*0.9);
     vel[i*3]   = dx * s;
-    vel[i*3+1] = dy * s + 0.2;     // leicht nach oben
+    vel[i*3+1] = dy * s + 0.2;
     vel[i*3+2] = dz * s;
 
-    // Farbe (türkis → weiß Mix)
     const mix = Math.random()*0.6 + 0.4;
-    col[i*3]   = 0.4*mix + 0.6;    // R
-    col[i*3+1] = 1.0;              // G
-    col[i*3+2] = 0.9*mix + 0.1;    // B
+    col[i*3]   = 0.4*mix + 0.6;
+    col[i*3+1] = 1.0;
+    col[i*3+2] = 0.9*mix + 0.1;
   }
 
   geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geom.setAttribute('color',    new THREE.BufferAttribute(col, 3));
 
-  const mat = new THREE.PointsMaterial({
-    size: SIZE,
-    vertexColors: true,
-    transparent: true,
-    opacity: 0.95,
-    depthWrite: false
-  });
-
+  const mat = new THREE.PointsMaterial({ size: SIZE, vertexColors: true, transparent: true, opacity: 0.95, depthWrite: false });
   const points = new THREE.Points(geom, mat);
   scene.add(points);
-
   bursts.push({ points, material: mat, velocities: vel, life: LIFE });
 }
-
 function updateBursts(dt) {
   for (let i = bursts.length - 1; i >= 0; i--) {
     const b = bursts[i];
@@ -394,21 +393,16 @@ function updateBursts(dt) {
     const pos  = geom.attributes.position.array;
     const vel  = b.velocities;
 
-    // Bewegung + einfache Gravitation + Dämpfung
     for (let j=0; j<vel.length/3; j++) {
-      vel[j*3+1] -= 1.6 * dt;                // Gravitation
+      vel[j*3+1] -= 1.6 * dt;
       pos[j*3]   += vel[j*3]   * dt;
       pos[j*3+1] += vel[j*3+1] * dt;
       pos[j*3+2] += vel[j*3+2] * dt;
-
-      // leichte Luftreibung
       vel[j*3]   *= (1 - 0.9*dt);
       vel[j*3+1] *= (1 - 0.5*dt);
       vel[j*3+2] *= (1 - 0.9*dt);
     }
     geom.attributes.position.needsUpdate = true;
-
-    // Fading
     b.material.opacity = Math.max(0, b.life / 0.7);
     if (b.life <= 0) {
       scene.remove(b.points);
@@ -423,7 +417,6 @@ function updateBursts(dt) {
 function render(timestamp, frame) {
   const dt = clock.getDelta();
 
-  // Hit-Test / Reticle-Update
   if (frame) {
     const session = renderer.xr.getSession();
     const referenceSpace = renderer.xr.getReferenceSpace();
@@ -431,7 +424,7 @@ function render(timestamp, frame) {
     if (!hitTestSourceRequested) {
       session.requestReferenceSpace('viewer').then((ref) => {
         session.requestHitTestSource({ space: ref }).then((source) => { hitTestSource = source; });
-      });
+      }).catch(()=>{});
       session.addEventListener('end', () => { hitTestSourceRequested = false; hitTestSource = null; });
       hitTestSourceRequested = true;
     }
@@ -441,7 +434,7 @@ function render(timestamp, frame) {
       let shown = false;
 
       if (hits.length > 0) {
-        // Nächstes horizontales Ergebnis bevorzugen
+        // horizontale Treffer bevorzugen
         let chosen = hits[0];
         const upWorld = new THREE.Vector3(0,1,0);
         for (const h of hits) {
@@ -451,55 +444,46 @@ function render(timestamp, frame) {
           const up = new THREE.Vector3(0,1,0).applyMatrix3(new THREE.Matrix3().setFromMatrix4(m)).normalize();
           if (up.dot(upWorld) > 0.85) { chosen = h; break; }
         }
-
         const pose = chosen.getPose(referenceSpace);
         if (pose) {
           reticle.visible = true;
           reticle.matrix.fromArray(pose.transform.matrix);
 
-          // Reticle-Animation (Puls + leichtes Schweben)
+          // Reticle-Animation
           const t = timestamp * 0.004;
           const s = 1.0 + Math.sin(t) * 0.06;
           const mat = reticle.matrix.clone();
           const pos = new THREE.Vector3(); const quat = new THREE.Quaternion(); const scl = new THREE.Vector3();
           mat.decompose(pos, quat, scl);
           reticle.matrix.compose(pos.add(new THREE.Vector3(0, 0.003*Math.sin(t*2.5), 0)), quat, new THREE.Vector3(s,1,s));
-
           shown = true;
         }
       }
-
       if (!shown) reticle.visible = false;
     }
   }
 
-  // Creature Animation + sanftes Umplatzieren
   if (creature.visible) {
     const u = creature.userData;
     const a = u.animationState;
 
-    // Sanfter Move
     if (u.moveTarget) {
       creature.position.lerp(u.moveTarget, Math.min(1, dt * 6));
       if (creature.position.distanceTo(u.moveTarget) < 0.005) u.moveTarget = null;
     }
 
-    // „Atmen“
     a.breath += dt * 2.0;
     const breathScale = 1 + Math.sin(a.breath) * 0.025;
     u.body.scale.setScalar(breathScale);
 
-    // Kopf minimal „neugierig“
     a.headPhase += dt * 1.2;
     u.head.rotation.y = Math.sin(a.headPhase) * 0.1;
     u.head.position.y = 0.28 + Math.sin(a.headPhase * 1.6) * 0.005;
 
-    // Schwanz wedeln
     a.tailPhase += dt * 4.0;
     u.tail.rotation.x = Math.PI/4 + Math.sin(a.tailPhase) * 0.28;
     u.tail.rotation.y = Math.sin(a.tailPhase * 0.9) * 0.4;
 
-    // Gelegentliches Blinzeln
     a.blinkTimer += dt;
     if (a.blinkTimer > 2.5 + Math.random()*2) {
       a.blinkTimer = 0;
@@ -509,7 +493,6 @@ function render(timestamp, frame) {
       });
     }
 
-    // Mini-Hüpfer alle paar Sekunden
     a.hopCooldown -= dt;
     if (a.hopCooldown <= 0) {
       a.hopCooldown = 2.5 + Math.random()*2.5;
@@ -517,19 +500,15 @@ function render(timestamp, frame) {
       setTimeout(()=> { creature.position.y -= 0.02; }, 160);
     }
 
-    // Zur Kamera drehen (subtil)
     const toCam = new THREE.Vector3(camera.position.x, creature.position.y, camera.position.z);
     const look = new THREE.Vector3().copy(toCam).sub(creature.position).normalize();
     const targetYaw = Math.atan2(look.x, look.z);
     creature.rotation.y = THREE.MathUtils.damp(creature.rotation.y, targetYaw, 8, dt);
   }
 
-  // Partikel updaten
   updateBursts(dt);
-
   renderer.render(scene, camera);
 }
-
 </script>
 </body>
 </html>
