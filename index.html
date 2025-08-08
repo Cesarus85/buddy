@@ -2,45 +2,21 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <title>WebXR AR – Pokémon Capture (Multi-Kreaturen)</title>
+  <title>WebXR AR – Pokémon Capture (Multi-Kreaturen) – Fixes</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     html, body { margin:0; padding:0; overflow:hidden; background:transparent; font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
-    #ui {
-      position:fixed; inset:0; pointer-events:none;
-      display:flex; align-items:flex-end; justify-content:center;
-      padding:16px;
-    }
-    .hint {
-      pointer-events:auto;
-      background:rgba(0,0,0,.55);
-      color:#fff;
-      padding:10px 12px; border-radius:12px; font-size:14px;
-      backdrop-filter: blur(6px);
-      max-width:min(90vw,720px);
-    }
-    .actions {
-      position:fixed; top:12px; right:12px; display:flex; gap:8px; pointer-events:auto;
-    }
-    .btn {
-      border:0; border-radius:10px; padding:8px 12px; font-size:14px; cursor:pointer;
-      background:#111; color:#fff; opacity:.9;
-    }
+    #ui { position:fixed; inset:0; pointer-events:none; display:flex; align-items:flex-end; justify-content:center; padding:16px; }
+    .hint { pointer-events:auto; background:rgba(0,0,0,.55); color:#fff; padding:10px 12px; border-radius:12px; font-size:14px; backdrop-filter: blur(6px); max-width:min(90vw,720px); }
+    .actions { position:fixed; top:12px; right:12px; display:flex; gap:8px; pointer-events:auto; }
+    .btn { border:0; border-radius:10px; padding:8px 12px; font-size:14px; cursor:pointer; background:#111; color:#fff; opacity:.9; }
     .btn:active { transform: translateY(1px); }
     .hidden { display:none !important; }
-    .legend {
-      position:fixed; left:12px; bottom:12px; font-size:12px; color:#fff; opacity:.75; pointer-events:auto;
-      background:rgba(0,0,0,.45); padding:6px 8px; border-radius:8px;
-    }
+    .legend { position:fixed; left:12px; bottom:12px; font-size:12px; color:#fff; opacity:.75; pointer-events:auto; background:rgba(0,0,0,.45); padding:6px 8px; border-radius:8px; }
   </style>
 </head>
 <body>
-  <div id="ui">
-    <div id="hint" class="hint">
-      Bewege das Headset/Smartphone, bis Flächen erkannt sind. <b>Controller 0: Select</b> platziert zufällig eine Figur. 
-      <b>Controller 1: Select</b> wirft die Poké-Kugel zum Fangen.
-    </div>
-  </div>
+  <div id="ui"><div id="hint" class="hint">Bewege das Headset/Smartphone, bis Flächen erkannt sind. <b>Controller 0: Select</b> platziert zufällig eine Figur. <b>Controller 1: Select</b> wirft die Poké-Kugel.</div></div>
   <div class="actions hidden" id="actions">
     <button class="btn" id="reposition">Neu platzieren</button>
     <button class="btn" id="remove">Entfernen</button>
@@ -54,8 +30,8 @@ import { ARButton } from 'https://unpkg.com/three@0.152.2/examples/jsm/webxr/ARB
 let camera, scene, renderer;
 let controller0, controller1;
 let reticle;
-let creature;                    // aktuell aktive Kreatur (wird aus Variants gewählt)
-let creatureVariants = [];       // alle Varianten
+let creature;
+let creatureVariants = [];
 let shadowPlane;
 let hitTestSource = null;
 let hitTestSourceRequested = false;
@@ -69,12 +45,12 @@ let placingMode = true;
 const tmpVec3 = new THREE.Vector3();
 let lastTime = 0;
 
-// Capture-States
+// Capture State
 let isCaptured = false;
 let pokeBall = null;
-let captureState = null; // null | 'fly' | 'hover' | 'suck' | 'fall'
-let captureT = 0;        // zeitliche Progression je Phase
-let captureData = null;  // { start, mid, target, groundY, velY, duration }
+let captureState = null;
+let captureT = 0;
+let captureData = null;
 
 function lerpAngle(a, b, t) {
   let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
@@ -102,7 +78,7 @@ function init() {
   });
   document.body.appendChild(btn);
 
-  // Beleuchtung
+  // Lights
   hemiLight = new THREE.HemisphereLight(0xffffff, 0x666688, 0.9);
   scene.add(hemiLight);
 
@@ -123,28 +99,28 @@ function init() {
   reticle.matrixAutoUpdate = false;
   reticle.visible = false;
   scene.add(reticle);
-
   const inner = new THREE.Mesh(
     new THREE.CircleGeometry(0.12, 32).rotateX(-Math.PI/2),
     new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent:true, opacity:0.15 })
   );
   reticle.add(inner);
 
-  // === KREATUR-VARIANTEN ANLEGEN ===
-  const baseRed     = buildBaseRed();     baseRed.scale.setScalar(1.00); // Referenzgröße
-  const pikaLike    = buildPikaLike();    pikaLike.scale.setScalar(0.85); // etwas kleiner
-  const turtleLike  = buildTurtleLike();  turtleLike.scale.setScalar(0.95); // kompakt
-  const lizardLike  = buildLizardLike();  lizardLike.scale.setScalar(1.15); // etwas größer
+  // Variants
+  const baseRed     = buildBaseRed();     baseRed.scale.setScalar(1.00);
+  const pikaLike    = buildPikaLike();    pikaLike.scale.setScalar(0.85);
+  const turtleLike  = buildTurtleLike();  turtleLike.scale.setScalar(0.95);
+  const lizardLike  = buildLizardLike();  lizardLike.scale.setScalar(1.15);
 
   creatureVariants = [baseRed, pikaLike, turtleLike, lizardLike];
   for (const g of creatureVariants) {
     g.visible = false;
+    // FIX: initialScale pro Variante speichern
+    g.userData.initialScale = g.scale.x;
     scene.add(g);
   }
-  // init „aktuelle“ Kreatur (wird beim Platzieren umgebogen)
   creature = baseRed;
 
-  // Kontakt-Schattenfläche
+  // Shadow receiver
   shadowPlane = new THREE.Mesh(
     new THREE.CircleGeometry(0.16, 32).rotateX(-Math.PI/2),
     new THREE.ShadowMaterial({ opacity: 0.35 })
@@ -153,12 +129,12 @@ function init() {
   shadowPlane.visible = false;
   scene.add(shadowPlane);
 
-  // Controller
-  controller0 = renderer.xr.getController(0); // Platzieren/Hüpfen (hier auch Zufallsauswahl)
+  // Controllers
+  controller0 = renderer.xr.getController(0);
   controller0.addEventListener('select', onSelectPrimary);
   scene.add(controller0);
 
-  controller1 = renderer.xr.getController(1); // Poké-Kugel
+  controller1 = renderer.xr.getController(1);
   controller1.addEventListener('select', onSelectCapture);
   scene.add(controller1);
 
@@ -169,7 +145,7 @@ function init() {
   document.getElementById('reposition').onclick = () => { placingMode = true; showHint("Ziel anvisieren & Select drücken – zufällige Figur wird platziert."); };
   document.getElementById('remove').onclick = () => removeCreature();
 
-  // Poké-Kugel vorbereiten
+  // Poké-Kugel
   pokeBall = buildPokeBall();
   pokeBall.visible = false;
   scene.add(pokeBall);
@@ -179,19 +155,15 @@ function init() {
 
 function onSessionStart() {
   const session = renderer.xr.getSession();
-  // Plane Detection Events
   session.updateWorldTrackingState({ planeDetectionState: { enabled: true } });
   session.addEventListener('planeadded', onPlaneAdded);
   session.addEventListener('planeremoved', onPlaneRemoved);
   session.addEventListener('planeupdated', onPlaneUpdated);
 
-  // Light Estimation (optional)
   try {
     if (session.requestLightProbe) {
       xrGlBinding = new XRWebGLBinding(session, renderer.getContext());
-      session.requestLightProbe({}).then(lp => {
-        xrLightProbe = lp;
-      }).catch(()=>{ xrLightProbe = null; });
+      session.requestLightProbe({}).then(lp => xrLightProbe = lp).catch(()=>{ xrLightProbe = null; });
     }
   } catch { xrLightProbe = null; }
 
@@ -204,22 +176,24 @@ function onWindowResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-/* =========================================================================================
-   KREATUREN – alle Varianten liefern dieselben userData-Felder, damit die Animation greift:
-   userData = { body, head, eyes:[], eyelids:[], ears:[], tail, feet:[], footBaseY, animationState:{...} }
-   ========================================================================================= */
-
-// Hilfsfunktion für Standard-Anim-Setup
+/* ========================== CREATURES ========================== */
+// Standard-Anim-Setup + Basishöhen & initialScale
 function withStandardAnimData(group, extras = {}) {
+  const head = extras.head;
+  const body = extras.body;
   group.userData = {
     ...extras,
     footBaseY: extras.footBaseY ?? 0.03,
+    // FIX: Basishöhen einmalig speichern
+    headBaseY: head ? head.position.y : 0,
+    bodyBaseY: body ? body.position.y : 0.12,
+    initialScale: group.scale.x,
     animationState: { breathPhase:0, blinkTimer:0, headBobPhase:0, tailWagPhase:0, jumpPhase:0, jumping:false, walkPhase:0 }
   };
   return group;
 }
 
-/* --------- Basis (deine ursprüngliche rote Figur) ---------- */
+/* --------- Base (rot) ---------- */
 function buildBaseRed() {
   const g = new THREE.Group();
 
@@ -270,21 +244,15 @@ function buildBaseRed() {
   return withStandardAnimData(g, { body, head, eyes:[eye1,eye2], eyelids:[eyelid1,eyelid2], ears:[ear1,ear2], tail, feet:[foot1,foot2] });
 }
 
-/* --------- Pika-ähnlich (gelb, lange Ohren mit schwarzen Spitzen, Blitz-Schwanz) ---------- */
+/* --------- Pika-ähnlich ---------- */
 function buildPikaLike() {
   const g = new THREE.Group();
-
   const yellow = 0xffd200;
-  const body = new THREE.Mesh(
-    new THREE.SphereGeometry(0.11, 20, 20),
-    new THREE.MeshStandardMaterial({ color: yellow, roughness:0.35 })
-  );
+
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.11, 20, 20), new THREE.MeshStandardMaterial({ color: yellow, roughness:0.35 }));
   body.castShadow = true; body.position.y = 0.11;
 
-  const head = new THREE.Mesh(
-    new THREE.SphereGeometry(0.085, 20, 20),
-    new THREE.MeshStandardMaterial({ color: yellow, roughness:0.3 })
-  );
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.085, 20, 20), new THREE.MeshStandardMaterial({ color: yellow, roughness:0.3 }));
   head.castShadow = true; head.position.set(0,0.27,0);
 
   const eyeGeom = new THREE.SphereGeometry(0.022, 12, 12);
@@ -297,19 +265,16 @@ function buildPikaLike() {
   const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
   const eyelid2 = eyelid1.clone(); eyelid2.position.copy(eye2.position); eyelid2.position.y += 0.01;
 
-  // rote Wangen
   const cheekGeom = new THREE.CircleGeometry(0.02, 16);
   const cheekMat = new THREE.MeshStandardMaterial({ color: 0xff4141, transparent:true, opacity:0.9 });
   const cheek1 = new THREE.Mesh(cheekGeom, cheekMat); cheek1.position.set(-0.055,0.255,0.055);
   const cheek2 = cheek1.clone(); cheek2.position.x = 0.055;
 
-  // Füße
   const footGeom = new THREE.SphereGeometry(0.028, 12, 12);
   const footMat = new THREE.MeshStandardMaterial({ color: 0xe6b800 });
   const foot1 = new THREE.Mesh(footGeom, footMat); foot1.position.set(-0.055, 0.03, 0.02); foot1.castShadow = true;
   const foot2 = foot1.clone(); foot2.position.x = 0.055;
 
-  // lange Ohren mit schwarzen Spitzen
   const earBaseGeom = new THREE.ConeGeometry(0.018, 0.1, 8);
   const earBlackGeom = new THREE.ConeGeometry(0.017, 0.04, 8);
   const earMat = new THREE.MeshStandardMaterial({ color: yellow });
@@ -328,7 +293,6 @@ function buildPikaLike() {
   const ear1 = makeEar(-1);
   const ear2 = makeEar(1);
 
-  // Blitz-Schwanz mit Boxen
   const tail = new THREE.Group();
   const tMat = new THREE.MeshStandardMaterial({ color: yellow, metalness:0.05, roughness:0.6 });
   const seg1 = new THREE.Mesh(new THREE.BoxGeometry(0.02,0.06,0.012), tMat);
@@ -345,24 +309,15 @@ function buildPikaLike() {
   return withStandardAnimData(g, { body, head, eyes:[eye1,eye2], eyelids:[eyelid1,eyelid2], ears:[ear1,ear2], tail, feet:[foot1,foot2] });
 }
 
-/* --------- Schiggy-ähnlich (blau, Schildkrötenpanzer) ---------- */
+/* --------- Schiggy-ähnlich ---------- */
 function buildTurtleLike() {
   const g = new THREE.Group();
+  const blue = 0x6ec6ff, shellBrown = 0x8b5a2b, shellRing = 0xf3e2b4;
 
-  const blue = 0x6ec6ff;
-  const shellBrown = 0x8b5a2b;
-  const shellRing = 0xf3e2b4;
-
-  const body = new THREE.Mesh(
-    new THREE.SphereGeometry(0.10, 20, 20),
-    new THREE.MeshStandardMaterial({ color: blue, roughness:0.35 })
-  );
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.10, 20, 20), new THREE.MeshStandardMaterial({ color: blue, roughness:0.35 }));
   body.castShadow = true; body.position.y = 0.10;
 
-  const head = new THREE.Mesh(
-    new THREE.SphereGeometry(0.085, 20, 20),
-    new THREE.MeshStandardMaterial({ color: blue, roughness:0.3 })
-  );
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.085, 20, 20), new THREE.MeshStandardMaterial({ color: blue, roughness:0.3 }));
   head.castShadow = true; head.position.set(0,0.26,0.02);
 
   const eyeGeom = new THREE.SphereGeometry(0.022, 12, 12);
@@ -375,7 +330,6 @@ function buildTurtleLike() {
   const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
   const eyelid2 = eyelid1.clone(); eyelid2.position.copy(eye2.position); eyelid2.position.y += 0.01;
 
-  // Panzer: Zylinder + Torus
   const shell = new THREE.Group();
   const core = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.10, 20), new THREE.MeshStandardMaterial({ color: shellBrown, roughness:0.7 }));
   core.rotation.x = Math.PI/2; core.castShadow = true;
@@ -384,7 +338,6 @@ function buildTurtleLike() {
   shell.add(core, ring);
   shell.position.set(0,0.14,-0.02);
 
-  // Arme/Beine als kurze Zylinder
   const limbMat = new THREE.MeshStandardMaterial({ color: blue });
   function limb(px, py, pz){
     const m = new THREE.Mesh(new THREE.CapsuleGeometry(0.02, 0.04, 6, 12), limbMat);
@@ -395,35 +348,26 @@ function buildTurtleLike() {
   const legL = limb(-0.06, 0.04, -0.01);
   const legR = limb(0.06, 0.04, -0.01);
 
-  // kleine angedeutete Ohren (Dummys, damit Animationen robust bleiben)
   const ear1 = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), limbMat); ear1.position.set(-0.045,0.34, -0.02);
   const ear2 = ear1.clone(); ear2.position.x = 0.045;
 
-  // kurzer Schwanz
   const tail = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.05, 8), new THREE.MeshStandardMaterial({ color: blue }));
   tail.position.set(0,0.15,-0.11); tail.rotation.x = Math.PI/3; tail.castShadow = true;
 
   g.add(body, head, eye1, eye2, eyelid1, eyelid2, shell, armL, armR, legL, legR, ear1, ear2, tail);
-  const feet = [legL, legR]; // für das „Trippeln“
+  const feet = [legL, legR];
   return withStandardAnimData(g, { body, head, eyes:[eye1,eye2], eyelids:[eyelid1,eyelid2], ears:[ear1,ear2], tail, feet, footBaseY:0.04 });
 }
 
-/* --------- Glumanda-ähnlich (orange, Flammenschwanz) ---------- */
+/* --------- Glumanda-ähnlich ---------- */
 function buildLizardLike() {
   const g = new THREE.Group();
-
   const orange = 0xff8a3d;
 
-  const body = new THREE.Mesh(
-    new THREE.SphereGeometry(0.12, 20, 20),
-    new THREE.MeshStandardMaterial({ color: orange, roughness:0.35 })
-  );
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.12, 20, 20), new THREE.MeshStandardMaterial({ color: orange, roughness:0.35 }));
   body.castShadow = true; body.position.y = 0.12;
 
-  const head = new THREE.Mesh(
-    new THREE.SphereGeometry(0.09, 20, 20),
-    new THREE.MeshStandardMaterial({ color: orange, roughness:0.3 })
-  );
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.09, 20, 20), new THREE.MeshStandardMaterial({ color: orange, roughness:0.3 }));
   head.castShadow = true; head.position.set(0,0.30,0.01);
 
   const eyeGeom = new THREE.SphereGeometry(0.024, 12, 12);
@@ -436,18 +380,15 @@ function buildLizardLike() {
   const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
   const eyelid2 = eyelid1.clone(); eyelid2.position.copy(eye2.position); eyelid2.position.y += 0.01;
 
-  // kleine „Hörnchen“ (Ohren-Ersatz)
   const earMat = new THREE.MeshStandardMaterial({ color: orange });
   const ear1 = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.05, 8), earMat); ear1.position.set(-0.05,0.36,-0.02); ear1.rotation.z = -0.2; ear1.castShadow = true;
   const ear2 = ear1.clone(); ear2.position.x = 0.05; ear2.rotation.z = 0.2;
 
-  // Füße
   const footGeom = new THREE.SphereGeometry(0.03, 12, 12);
   const footMat = new THREE.MeshStandardMaterial({ color: 0xffa766 });
   const foot1 = new THREE.Mesh(footGeom, footMat); foot1.position.set(-0.06, 0.03, 0.02); foot1.castShadow = true;
   const foot2 = foot1.clone(); foot2.position.x = 0.06;
 
-  // langer Schwanz + „Flamme“
   const tail = new THREE.Group();
   const base = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.11, 10), new THREE.MeshStandardMaterial({ color: orange }));
   base.castShadow = true;
@@ -504,7 +445,7 @@ function buildPokeBall() {
   return group;
 }
 
-/* --------- Plane Debug Mesh ---------- */
+/* --------- Plane Debug ---------- */
 function createPlaneMesh(plane) {
   const geometry = new THREE.BufferGeometry();
   const positions = new Float32Array(plane.polygon.length * 3);
@@ -527,7 +468,6 @@ function updatePlaneMesh(mesh, plane) {
   }
   mesh.geometry.attributes.position.needsUpdate = true;
 }
-
 function onPlaneAdded(e){ const mesh = createPlaneMesh(e.plane); planeMeshes.set(e.plane, mesh); scene.add(mesh); lastPlaneSeenAt = performance.now(); }
 function onPlaneUpdated(e){ const mesh = planeMeshes.get(e.plane); if (mesh) updatePlaneMesh(mesh, e.plane); lastPlaneSeenAt = performance.now(); }
 function onPlaneRemoved(e){ const mesh = planeMeshes.get(e.plane); if (mesh){ scene.remove(mesh); planeMeshes.delete(e.plane); } }
@@ -541,45 +481,39 @@ function showHint(text, timeoutMs=3500){
 }
 function showActions(show){ document.getElementById('actions').classList.toggle('hidden', !show); }
 
-/* --------- Primary Controller (Platzieren/Hüpfen) ---------- */
+/* --------- Controller primary (place / jump) ---------- */
 function onSelectPrimary() {
   if (reticle.visible || placingMode) {
-    // Zufällig eine Kreatur auswählen
     const idx = Math.floor(Math.random() * creatureVariants.length);
     creature = creatureVariants[idx];
-    // Alle anderen verbergen
     for (const g of creatureVariants){ if (g !== creature) g.visible = false; }
-    placeCreatureAtReticle();
+    placeCreatureAtReticle();       // FIX: setzt Scale/State zurück
     placingMode = false;
     return;
   }
   if (creature.visible && !isCaptured) triggerJump();
 }
 
-/* --------- Secondary Controller (Poké-Kugel) ---------- */
+/* --------- Controller secondary (capture) ---------- */
 function onSelectCapture() {
-  if (!creature.visible || isCaptured || captureState) return; // nichts zu fangen
-  // Starte „Wurf“ von Controller1-Position Richtung Ziel über der Figur
+  if (!creature || !creature.visible || isCaptured || captureState) return; // FIX: harte Guards
+
   const start = new THREE.Vector3();
   controller1.getWorldPosition(start);
 
   const target = creature.position.clone();
-  target.y += 0.55; // Punkt über der Figur, wo die Kugel „schwebt“
+  target.y += 0.55;
 
-  // kleine Bogenbahn: mid-Punkt etwas über der direkten Linie
   const mid = start.clone().lerp(target, 0.5);
   mid.y += 0.35;
 
-  // Bodenhöhe
   const groundY = shadowPlane.visible ? shadowPlane.position.y : (creature.position.y - 0.03);
 
-  // Kugel initialisieren
   pokeBall.position.copy(start);
   pokeBall.visible = true;
   pokeBall.scale.set(1,1,1);
   pokeBall.userData.spinning = true;
 
-  // Capture-Phasen setzen
   captureState = 'fly';
   captureT = 0;
   captureData = { start, mid, target, groundY, velY: 0, duration: 0.6 };
@@ -590,24 +524,49 @@ function onSelectCapture() {
 function placeCreatureAtReticle(){
   if (!reticle.visible) { showHint("Kein Ziel gefunden – bewege dich etwas.", 2000); return; }
 
-  creature.position.setFromMatrixPosition(reticle.matrix);
-  creature.position.y -= 0.03; // Füße auf Boden
-  creature.rotation.set(0, 0, 0); // aufrecht
+  // FIX: Scale immer auf initialScale zurücksetzen
+  const initScale = creature.userData.initialScale ?? 1;
+  creature.scale.set(initScale, initScale, initScale);
 
-  // Schatten-Plane
+  creature.position.setFromMatrixPosition(reticle.matrix);
+  creature.position.y -= 0.03;
+  creature.rotation.set(0, 0, 0);
+
+  // FIX: Animation/Capture State zurücksetzen
+  creature.userData.animationState = { breathPhase:0, blinkTimer:0, headBobPhase:0, tailWagPhase:0, jumpPhase:0, jumping:false, walkPhase:0 };
+  isCaptured = false;
+  captureState = null;
+  captureT = 0;
+  captureData = null;
+
+  // FIX: Augenlider wieder offen
+  if (creature.userData.eyelids) for (const lid of creature.userData.eyelids) lid.scale.y = 0;
+
   shadowPlane.position.copy(creature.position);
   shadowPlane.position.y += 0.002;
   shadowPlane.visible = true;
 
   creature.visible = true;
-  isCaptured = false; // neu ausgesetzt = nicht mehr gefangen
   showActions(true);
   showHint("Figur gesetzt. Tipp/Select (Controller 0) lässt sie hüpfen. (Controller 1) wirft die Poké-Kugel.", 2500);
 }
 
 function removeCreature(){
-  for (const g of creatureVariants) g.visible = false;
+  for (const g of creatureVariants) {
+    g.visible = false;
+    // FIX: auch hier Scale sauber resetten
+    const s = g.userData.initialScale ?? 1;
+    g.scale.set(s,s,s);
+  }
   shadowPlane.visible = false;
+
+  // FIX: Capture-Aufräumen
+  isCaptured = false;
+  captureState = null;
+  captureT = 0;
+  captureData = null;
+  pokeBall.visible = false;
+
   placingMode = true;
   showActions(false);
   showHint("Figur entfernt. Richte das Reticle aus und platziere neu (zufällige Auswahl).");
@@ -623,7 +582,6 @@ function render(timestamp, frame) {
   const dt = lastTime ? (timestamp - lastTime) / 1000 : 0;
   lastTime = timestamp;
 
-  // Hit-Test & Light Estimation
   if (frame) {
     const session = renderer.xr.getSession();
     const referenceSpace = renderer.xr.getReferenceSpace();
@@ -670,12 +628,12 @@ function render(timestamp, frame) {
     }
   }
 
-  // Kreatur: Ausrichtung + Idle-Animationen
+  // Creature idle + follow
   if (creature && creature.visible && !isCaptured) {
     const ud = creature.userData;
     const st = ud.animationState;
 
-    // Immer zu dir drehen (nur Yaw)
+    // zur Kamera drehen (Yaw)
     const toCam = tmpVec3.subVectors(camera.position, creature.position);
     toCam.y = 0;
     let turnSpeed = 0;
@@ -686,7 +644,7 @@ function render(timestamp, frame) {
       turnSpeed = Math.min(1, Math.abs(diff) / 0.4);
     }
 
-    // Fuß-Trippeln beim Drehen
+    // Trippeln beim Drehen
     if (ud.feet && ud.feet.length && turnSpeed > 0.05) {
       st.walkPhase += (3.5 + 6.0 * turnSpeed) * dt;
       const amp = 0.012 + 0.01 * turnSpeed;
@@ -695,24 +653,26 @@ function render(timestamp, frame) {
       const liftR = Math.max(0, Math.sin(st.walkPhase + Math.PI));
       ud.feet[0].position.y = base + liftL * amp;
       ud.feet[1].position.y = base + liftR * amp;
-      ud.body.position.y = (ud.body.position.y || 0.12); // Stabilisierung der Basis
-      ud.body.position.y = 0.12 + (liftL + liftR) * 0.004;
+      // FIX: Körper-Höhe relativ zur Basis
+      ud.body.position.y = ud.bodyBaseY + (liftL + liftR) * 0.004;
     } else if (ud.feet && ud.feet.length){
+      // FIX: sanft zur Basis zurück
       ud.feet[0].position.y += (ud.footBaseY - ud.feet[0].position.y) * Math.min(1, 8*dt);
       ud.feet[1].position.y += (ud.footBaseY - ud.feet[1].position.y) * Math.min(1, 8*dt);
-      ud.body.position.y += (0.12 - ud.body.position.y) * Math.min(1, 8*dt);
+      ud.body.position.y += (ud.bodyBaseY - ud.body.position.y) * Math.min(1, 8*dt);
     }
 
-    // Atmung
+    // Atmung (Skalierung ok)
     st.breathPhase += 0.02;
     const breathScale = 1 + Math.sin(st.breathPhase) * 0.03;
     ud.body.scale.set(breathScale, breathScale, breathScale);
 
-    // Kopf idle
+    // Kopf-Idle
     st.headBobPhase += 0.015;
     if (ud.head){
       ud.head.rotation.y = Math.sin(st.headBobPhase) * 0.1;
-      ud.head.position.y = (ud.head.position.y) + Math.sin(st.headBobPhase * 1.5) * 0.005;
+      // FIX: kein += mehr → relative Modulation um headBaseY
+      ud.head.position.y = ud.headBaseY + Math.sin(st.headBobPhase * 1.5) * 0.005;
     }
 
     // Blinzeln
@@ -755,12 +715,12 @@ function render(timestamp, frame) {
       shadowPlane.scale.lerp(tmpVec3.set(1,1,1), 0.2);
     }
 
-    // Schatten-Plane folgt
+    // Schatten folgt
     shadowPlane.position.x = creature.position.x;
     shadowPlane.position.z = creature.position.z;
   }
 
-  // Poké-Kugel Animation (Capture-FSM)
+  // Poké-Kugel FSM
   if (captureState) {
     const dtLocal = dt;
     pokeBall.rotation.x += dtLocal * 3.0;
@@ -790,7 +750,9 @@ function render(timestamp, frame) {
         creature.position.lerp(pokeBall.position, 0.18);
         creature.rotation.y += 0.35;
         const s = 1 - t;
-        creature.scale.setScalar(Math.max(0, s) * (creature.userData.initialScale || 1));
+        // FIX: skaliere relativ zu initialScale
+        const init = creature.userData.initialScale ?? 1;
+        creature.scale.setScalar(Math.max(0, s) * init);
         if (t >= 1) {
           creature.visible = false;
           isCaptured = true;
@@ -826,7 +788,6 @@ function render(timestamp, frame) {
     }
   }
 
-  // Plane-Overlays nach 5s ohne Update ausblenden
   if (allowPlaneDebug && performance.now() - lastPlaneSeenAt > 5000) {
     allowPlaneDebug = false;
     document.getElementById('legend')?.classList.add('hidden');
