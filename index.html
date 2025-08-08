@@ -84,45 +84,30 @@ function playWhoosh() {
   const bufferSize = Math.floor(dur * audioCtx.sampleRate);
   const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
   const data = buffer.getChannelData(0);
-  // weißes Rauschen
   for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * 0.5;
   const src = audioCtx.createBufferSource();
   src.buffer = buffer;
-
-  const hp = audioCtx.createBiquadFilter();
-  hp.type = 'highpass';
-  hp.frequency.setValueAtTime(600, audioCtx.currentTime);
+  const hp = audioCtx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.setValueAtTime(600, audioCtx.currentTime);
   hp.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + dur * 0.7);
-
   const g = playGainEnv(src, dur, 0.01, 0.3, 0.8);
   src.connect(hp).connect(g);
-  src.start();
-  src.stop(audioCtx.currentTime + dur + 0.05);
+  src.start(); src.stop(audioCtx.currentTime + dur + 0.05);
 }
 
 // Suction: tiefer Sinus + Bandpass-Rauschen, Pitch-Sweep nach unten
 function playSuck() {
   if (!audioUnlocked) return;
   const dur = 0.7;
-  const osc = audioCtx.createOscillator();
-  osc.type = 'sine';
+  const osc = audioCtx.createOscillator(); osc.type = 'sine';
   osc.frequency.setValueAtTime(380, audioCtx.currentTime);
   osc.frequency.exponentialRampToValueAtTime(120, audioCtx.currentTime + dur);
-
-  const noiseDur = dur;
-  const bufferSize = Math.floor(noiseDur * audioCtx.sampleRate);
+  const bufferSize = Math.floor(dur * audioCtx.sampleRate);
   const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
   const data = buffer.getChannelData(0);
   for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * 0.35;
-  const noise = audioCtx.createBufferSource();
-  noise.buffer = buffer;
-
-  const bp = audioCtx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.setValueAtTime(500, audioCtx.currentTime);
-  bp.frequency.exponentialRampToValueAtTime(250, audioCtx.currentTime + dur);
-  bp.Q.value = 5;
-
+  const noise = audioCtx.createBufferSource(); noise.buffer = buffer;
+  const bp = audioCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.setValueAtTime(500, audioCtx.currentTime);
+  bp.frequency.exponentialRampToValueAtTime(250, audioCtx.currentTime + dur); bp.Q.value = 5;
   const gMain = playGainEnv(osc, dur, 0.02, 0.6, 0.6);
   const gNoise = playGainEnv(noise, dur, 0.02, 0.6, 0.35);
   noise.connect(bp).connect(gNoise);
@@ -135,21 +120,13 @@ function playSuck() {
 function playClick() {
   if (!audioUnlocked) return;
   const dur = 0.18;
-  const osc = audioCtx.createOscillator();
-  osc.type = 'triangle';
+  const osc = audioCtx.createOscillator(); osc.type = 'triangle';
   osc.frequency.setValueAtTime(500, audioCtx.currentTime);
   osc.frequency.exponentialRampToValueAtTime(150, audioCtx.currentTime + dur);
-
-  // leichter „Holz“-Körper per Resonanz
-  const bp = audioCtx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = 220;
-  bp.Q.value = 8;
-
+  const bp = audioCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 220; bp.Q.value = 8;
   const g = playGainEnv(osc, dur, 0.005, 0.16, 0.7);
   osc.connect(bp).connect(g);
-  osc.start();
-  osc.stop(audioCtx.currentTime + dur + 0.05);
+  osc.start(); osc.stop(audioCtx.currentTime + dur + 0.05);
 }
 
 function lerpAngle(a, b, t) { let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI; return a + diff * t; }
@@ -168,9 +145,10 @@ function init() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
 
+  // *** Wichtig: Plane-Detection nur optional ***
   const btn = ARButton.createButton(renderer, {
-    requiredFeatures: ['hit-test', 'plane-detection'],
-    optionalFeatures: ['dom-overlay','light-estimation'],
+    requiredFeatures: ['hit-test'], // nur hit-test ist Pflicht
+    optionalFeatures: ['plane-detection','dom-overlay','light-estimation'],
     domOverlay: { root: document.body }
   });
   document.body.appendChild(btn);
@@ -231,22 +209,30 @@ function init() {
 // ====== Session & Resize ======
 function onSessionStart() {
   const session = renderer.xr.getSession();
-  session.updateWorldTrackingState({ planeDetectionState: { enabled: true } });
-  session.addEventListener('planeadded', onPlaneAdded);
-  session.addEventListener('planeremoved', onPlaneRemoved);
-  session.addEventListener('planeupdated', onPlaneUpdated);
 
+  // Plane Detection nur versuchen, wenn verfügbar
+  try {
+    session.updateWorldTrackingState?.({ planeDetectionState: { enabled: true } });
+    session.addEventListener?.('planeadded', onPlaneAdded);
+    session.addEventListener?.('planeremoved', onPlaneRemoved);
+    session.addEventListener?.('planeupdated', onPlaneUpdated);
+  } catch (e) {
+    console.warn('Plane detection not available:', e);
+  }
+
+  // Light Estimation (optional)
   try {
     if (session.requestLightProbe) {
       xrGlBinding = new XRWebGLBinding(session, renderer.getContext());
       session.requestLightProbe({}).then(lp => { xrLightProbe = lp; }).catch(()=>{ xrLightProbe = null; });
     }
   } catch { xrLightProbe = null; }
+
   showHint("Bewegen, bis Flächen erkannt sind. C0: Platzieren/Hüpfen. C1: Kugel werfen.");
 }
 function onWindowResize(){ camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
 
-// ====== Creature Factory ======
+// ====== Creature Factory (alles aus Formen) ======
 function finalizeMon(g) {
   if (!g.userData) g.userData = {};
   if (!g.userData.animationState) g.userData.animationState = {breathPhase:0, blinkTimer:0, headBobPhase:0, tailWagPhase:0, jumpPhase:0, jumping:false, walkPhase:0};
@@ -290,7 +276,7 @@ function buildClassic() {
   return g;
 }
 
-// 2) Elektro-Wuschel
+// 2) Elektro-Wuschel (Pikachu-Vibes, aber eigenständig)
 function buildElectric() {
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.SphereGeometry(0.10,20,20), new THREE.MeshStandardMaterial({ color:0xffd83b, roughness:0.35, metalness:0.08 }));
@@ -322,7 +308,7 @@ function buildElectric() {
   return g;
 }
 
-// 3) Schildkrötchen
+// 3) Schildkrötchen (Schiggy-Vibes, eigenständig)
 function buildTurtle() {
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.SphereGeometry(0.09,20,20), new THREE.MeshStandardMaterial({ color:0x6ec6ff, roughness:0.4, metalness:0.05 }));
@@ -344,7 +330,7 @@ function buildTurtle() {
   return g;
 }
 
-// 4) Feuer-Echse
+// 4) Feuer-Echse (Glumanda-Vibes, eigenständig)
 function buildFireLizard() {
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.SphereGeometry(0.13,20,20), new THREE.MeshStandardMaterial({ color:0xff7f3f, roughness:0.35, metalness:0.06 }));
@@ -388,7 +374,8 @@ function buildPokeBall() {
   const r = 0.06;
   const hemiTop = new THREE.Mesh(new THREE.SphereGeometry(r,24,16,0,Math.PI*2,0,Math.PI/2), new THREE.MeshStandardMaterial({ color:0xd11b1b, metalness:0.2, roughness:0.4 })); hemiTop.castShadow = true;
   const hemiBot = new THREE.Mesh(new THREE.SphereGeometry(r,24,16,0,Math.PI*2,Math.PI/2,Math.PI/2), new THREE.MeshStandardMaterial({ color:0xffffff, metalness:0.05, roughness:0.6 })); hemiBot.castShadow = true;
-  const band = new THREE.Mesh(new THREE.TorusGeometry(r*0.72, r*0.08, 10, 32), new THREE.MeshStandardMaterial({ color:0x111111, metalness:0.3, roughness:0.3 })); band.rotation.x = Math.PI/2; band.castShadow = true;
+  const band = new THREE Mesh(new THREE.TorusGeometry(r*0.72, r*0.08, 10, 32), new THREE.MeshStandardMaterial({ color:0x111111, metalness:0.3, roughness:0.3 })); 
+  band.rotation.x = Math.PI/2; band.castShadow = true;
   const buttonOuter = new THREE.Mesh(new THREE.CylinderGeometry(r*0.16, r*0.16, r*0.06, 20), new THREE.MeshStandardMaterial({ color:0xeeeeee, metalness:0.1, roughness:0.5 })); buttonOuter.position.z = r*0.72; buttonOuter.rotation.x = Math.PI/2;
   const buttonInner = new THREE.Mesh(new THREE.CylinderGeometry(r*0.10, r*0.10, r*0.04, 20), new THREE.MeshStandardMaterial({ color:0x3ac5ff, emissive:0x004466, emissiveIntensity:0.2 })); buttonInner.position.copy(buttonOuter.position); buttonInner.rotation.copy(buttonOuter.rotation);
   group.add(hemiTop, hemiBot, band, buttonOuter, buttonInner);
@@ -425,9 +412,7 @@ function onSelectPrimary() {
 }
 function onSelectCapture() {
   if (!currentMon || !currentMon.visible || isCaptured || captureState) return;
-  // Audio: Whoosh beim Wurf
-  playWhoosh();
-
+  playWhoosh(); // SFX: Wurf
   const start = new THREE.Vector3(); controller1.getWorldPosition(start);
   const target = currentMon.position.clone(); target.y += 0.55;
   const mid = start.clone().lerp(target, 0.5); mid.y += 0.35;
@@ -442,8 +427,7 @@ function onSelectCapture() {
 function placeRandomMonAtReticle(){
   if (!reticle.visible) { showHint("Kein Ziel gefunden – bewege dich etwas.", 1800); return; }
   if (currentMon) { scene.remove(currentMon); currentMon = null; }
-  currentMon = createRandomMon();
-  scene.add(currentMon);
+  currentMon = createRandomMon(); scene.add(currentMon);
   currentMon.position.setFromMatrixPosition(reticle.matrix);
   currentMon.position.y -= 0.03;
   currentMon.rotation.set(0, 0, 0);
@@ -577,8 +561,7 @@ function render(timestamp, frame) {
       captureT += dt; pokeBall.position.y = captureData.target.y + Math.sin(captureT*6.0)*0.02;
       if (captureT > 0.35) { 
         captureState = 'suck'; captureT = 0; 
-        // Audio: Start Einsaugen
-        playSuck();
+        playSuck(); // SFX: Einsaugen
       }
     } else if (captureState === 'suck') {
       if (currentMon && currentMon.visible) {
@@ -594,8 +577,7 @@ function render(timestamp, frame) {
       const g = -2.8; captureData.velY += g * dt; pokeBall.position.y += captureData.velY * dt;
       if (pokeBall.position.y <= captureData.groundY + 0.03) {
         pokeBall.position.y = captureData.groundY + 0.03;
-        // Audio: Aufprall/Click
-        playClick();
+        playClick(); // SFX: Aufprall/Click
         if (Math.abs(captureData.velY) > 0.6) {
           captureData.velY *= -0.35;
         } else {
@@ -617,6 +599,9 @@ function render(timestamp, frame) {
 function onPlaneAdded(e){ const mesh = createPlaneMesh(e.plane); planeMeshes.set(e.plane, mesh); scene.add(mesh); lastPlaneSeenAt = performance.now(); }
 function onPlaneUpdated(e){ const mesh = planeMeshes.get(e.plane); if (mesh) updatePlaneMesh(mesh, e.plane); lastPlaneSeenAt = performance.now(); }
 function onPlaneRemoved(e){ const mesh = planeMeshes.get(e.plane); if (mesh){ scene.remove(mesh); planeMeshes.delete(e.plane); } }
+
+// ====== Poké-Kugel-Geometrie Fix (kleiner Tippfehler-Schutz) ======
+function buildPokeBall_safe() { try { return buildPokeBall(); } catch(e) { console.error(e); const g=new THREE.Group(); g.add(new THREE.Mesh(new THREE.SphereGeometry(0.06,16,12), new THREE.MeshStandardMaterial({color:0xd11b1b}))); return g; } }
 </script>
 </body>
 </html>
