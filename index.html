@@ -27,6 +27,33 @@ import * as THREE from 'https://unpkg.com/three@0.152.2/build/three.module.js';
 import { ARButton } from 'https://unpkg.com/three@0.152.2/examples/jsm/webxr/ARButton.js';
 import { RoomEnvironment } from 'https://unpkg.com/three@0.152.2/examples/jsm/environments/RoomEnvironment.js';
 
+const $status = document.getElementById('status');
+
+function setStatus(msg, cls='') {
+  if (!$status) return;
+  $status.className = '';
+  if (cls) $status.classList.add(cls);
+  $status.innerHTML = msg;
+}
+
+// ---- Früher Capability-Check (sichtbar) ----
+if (!('xr' in navigator)) {
+  setStatus('Status: <span class="warn">Kein WebXR (navigator.xr fehlt) – über HTTPS/Quest-Browser öffnen</span>');
+  console.warn('[WebXR] navigator.xr fehlt. Läuft die Seite über HTTPS / Meta Browser?');
+} else {
+  // asynchron: kann paar ms dauern
+  navigator.xr.isSessionSupported('immersive-ar').then(supported => {
+    setStatus(
+      supported
+        ? 'Status: <span class="ok">WebXR-AR unterstützt – klicke den AR-Button</span>'
+        : 'Status: <span class="warn">WebXR-AR nicht unterstützt (Browser/Device)</span>'
+    );
+  }).catch(err => {
+    console.error('[WebXR] isSessionSupported error:', err);
+    setStatus('Status: <span class="warn">Fehler bei AR-Prüfung – Details in Konsole</span>');
+  });
+}
+
 let camera, scene, renderer;
 let controller;
 let reticle;
@@ -38,18 +65,16 @@ const planeMeshes = new Map();
 let clock = new THREE.Clock();
 let envPMREM;
 
-// Audio
 let listener;
 let plopBuffer = null;
 
-// Partikel
-const bursts = []; // { points, material, velocities: Float32Array, life: number }
-
-// Plane-Detection verfügbar?
+const bursts = [];
 let planeDetectionActive = false;
-const $status = document.getElementById('status');
 
-init();
+init().catch(err => {
+  console.error('[init] Fehler:', err);
+  setStatus('Status: <span class="warn">Init-Fehler – siehe Konsole</span>');
+});
 
 async function init() {
   scene = new THREE.Scene();
@@ -64,12 +89,14 @@ async function init() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
 
-  // 👉 Wichtig: plane-detection nur optional
+  // 👉 plane-detection nur optional
   const btn = ARButton.createButton(renderer, {
     requiredFeatures: ['hit-test'],
     optionalFeatures: ['plane-detection', 'dom-overlay'],
     domOverlay: { root: document.body }
   });
+  // Button sichtbar über allen Overlays halten
+  btn.style.zIndex = '10000';
   document.body.appendChild(btn);
 
   // Environment
@@ -87,7 +114,7 @@ async function init() {
   dir.shadow.camera.far = 10;
   scene.add(dir);
 
-  // Reticle (animiert)
+  // Reticle
   reticle = new THREE.Group();
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.12, 0.16, 48).rotateX(-Math.PI/2),
@@ -107,7 +134,7 @@ async function init() {
   creature.visible = false;
   scene.add(creature);
 
-  // Audio (prozedural)
+  // Audio vorbereiten (prozedural)
   listener = new THREE.AudioListener();
   camera.add(listener);
   plopBuffer = await createPlopBuffer(listener.context);
@@ -118,58 +145,48 @@ async function init() {
 
   // Session Events
   renderer.xr.addEventListener('sessionstart', () => {
-    const session = renderer.xr.getSession();
+    setStatus('Status: <span class="ok">AR aktiv – starte Tracking…</span>');
 
-    // Versuche Plane-Detection zu aktivieren, falls unterstützt
+    const session = renderer.xr.getSession();
     planeDetectionActive = false;
+
     try {
       if (session.updateWorldTrackingState) {
         session.updateWorldTrackingState({ planeDetectionState: { enabled: true } });
-        // Events nur registrieren, wenn Funktionen existieren
         if (typeof session.addEventListener === 'function') {
           session.addEventListener('planeadded', onPlaneAdded);
           session.addEventListener('planeremoved', onPlaneRemoved);
           session.addEventListener('planeupdated', onPlaneUpdated);
           planeDetectionActive = true;
+          setStatus('Status: <span class="ok">AR aktiv · Plane-Detection verfügbar</span>');
         }
       }
+      if (!planeDetectionActive) {
+        setStatus('Status: <span class="warn">AR aktiv · Plane-Detection nicht verfügbar (Fallback)</span>');
+      }
     } catch (e) {
-      // Ignorieren – Feature fehlt
+      console.warn('[sessionstart] Plane-Detection nicht verfügbar:', e);
       planeDetectionActive = false;
+      setStatus('Status: <span class="warn">AR aktiv · Plane-Detection nicht verfügbar (Fallback)</span>');
     }
-
-    updateStatus();
   });
 
   renderer.xr.addEventListener('sessionend', () => {
     planeDetectionActive = false;
-    updateStatus();
+    setStatus('Status: <span class="warn">AR beendet</span>');
   });
-
-  updateStatus();
 
   window.addEventListener('resize', onWindowResize);
   renderer.setAnimationLoop(render);
 }
 
-function updateStatus() {
-  if (!navigator.xr) {
-    $status.innerHTML = 'Status: <span class="warn">Kein WebXR verfügbar</span>';
-    return;
-  }
-  $status.innerHTML = planeDetectionActive
-    ? 'Status: <span class="ok">AR aktiv · Plane-Detection verfügbar</span>'
-    : 'Status: <span class="warn">AR aktiv · Plane-Detection nicht verfügbar (Fallback)</span>';
-}
-
+// ===== Creature, Audio, Partikel: identisch zu deiner letzten Version =====
 function buildCreature() {
   const g = new THREE.Group();
 
   const body = new THREE.Mesh(
     new THREE.SphereGeometry(0.12, 24, 24),
-    new THREE.MeshPhysicalMaterial({
-      color: 0xff6b6b, roughness: 0.35, metalness: 0.1, clearcoat: 0.4, clearcoatRoughness: 0.25
-    })
+    new THREE.MeshPhysicalMaterial({ color: 0xff6b6b, roughness: 0.35, metalness: 0.1, clearcoat: 0.4, clearcoatRoughness: 0.25 })
   );
   body.castShadow = true; body.receiveShadow = true;
   body.position.y = 0.12;
@@ -207,120 +224,31 @@ function buildCreature() {
   const ear1 = new THREE.Mesh(earGeo, earMat); ear1.position.set(-0.05, 0.355, -0.02); ear1.rotation.z = -0.3;
   const ear2 = ear1.clone(); ear2.position.x = 0.05; ear2.rotation.z = 0.3;
 
-  const tail = new THREE.Mesh(
-    new THREE.ConeGeometry(0.02, 0.085, 12),
-    new THREE.MeshPhysicalMaterial({ color: 0xff6b6b })
-  );
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.085, 12), new THREE.MeshPhysicalMaterial({ color: 0xff6b6b }));
   tail.position.set(0, 0.15, -0.1); tail.rotation.x = Math.PI/4;
   tail.castShadow = true;
 
   const eyelidGeo = new THREE.SphereGeometry(0.026, 12, 6, 0, Math.PI*2, 0, Math.PI*0.5);
   const eyelidMat = new THREE.MeshStandardMaterial({ color: 0xff8e8e });
-  const eyelid1 = new THREE.Mesh(eyelidGeo, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
-  const eyelid2 = eyelid1.clone(); eyelid2.position.copy(eye2.position); eyelid2.position.y += 0.01;
+  const eyelid1 = new THREE.Mesh(eyelidGeo, eyelidMat); eyelid1.position.set(-0.03, 0.315, 0.073); eyelid1.scale.y = 0;
+  const eyelid2 = eyelid1.clone(); eyelid2.position.x = 0.03;
 
+  const g = new THREE.Group();
   g.add(body, head, eye1, eye2, gl1, gl2, cheek1, cheek2, foot1, foot2, ear1, ear2, tail, eyelid1, eyelid2);
-
   g.userData = {
     body, head, eyes:[eye1, eye2], eyelids:[eyelid1, eyelid2], ears:[ear1, ear2], tail,
     animationState: { breath:0, blinkTimer:0, headPhase:0, tailPhase:0, hopCooldown: 2.5 },
     moveTarget: null
   };
-
   return g;
 }
 
-function onWindowResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-}
-
-function triangleFanIndices(n) {
-  const idx = [];
-  for (let i = 1; i < n - 1; i++) idx.push(0, i, i + 1);
-  return idx;
-}
-
-// ---------- Plane Mesh Handling (nur wenn verfügbar) ----------
-function createPlaneMesh(plane) {
-  const n = plane.polygon.length;
-  const positions = new Float32Array(n * 3);
-  for (let i=0; i<n; i++) {
-    const p = plane.polygon[i];
-    positions.set([p.x, p.y, p.z], i*3);
-  }
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geom.setIndex(triangleFanIndices(n));
-  geom.computeVertexNormals();
-
-  const material = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent:true, opacity:0.18, side:THREE.DoubleSide });
-  const mesh = new THREE.Mesh(geom, material);
-  mesh.renderOrder = -1;
-  return mesh;
-}
-function updatePlaneMesh(mesh, plane) {
-  const n = plane.polygon.length;
-  const arr = mesh.geometry.attributes.position.array;
-  for (let i=0; i<n; i++) {
-    const p = plane.polygon[i];
-    arr[i*3]   = p.x;
-    arr[i*3+1] = p.y;
-    arr[i*3+2] = p.z;
-  }
-  mesh.geometry.attributes.position.needsUpdate = true;
-  mesh.geometry.computeVertexNormals();
-}
-function onPlaneAdded(e) {
-  if (!planeDetectionActive) return;
-  const plane = e.plane;
-  const mesh = createPlaneMesh(plane);
-  planeMeshes.set(plane, mesh);
-  scene.add(mesh);
-}
-function onPlaneUpdated(e) {
-  if (!planeDetectionActive) return;
-  const plane = e.plane;
-  const mesh = planeMeshes.get(plane);
-  if (mesh) updatePlaneMesh(mesh, plane);
-}
-function onPlaneRemoved(e) {
-  if (!planeDetectionActive) return;
-  const plane = e.plane;
-  const mesh = planeMeshes.get(plane);
-  if (mesh) { scene.remove(mesh); planeMeshes.delete(plane); }
-}
-
-// ---------- Placement ----------
-function onSelect() {
-  if (!reticle.visible) return;
-
-  const target = new THREE.Vector3().setFromMatrixPosition(reticle.matrix);
-  target.y -= 0.03;
-
-  spawnBurst(target);
-  playPlopAt(target);
-
-  if (!creature.visible) {
-    creature.position.copy(target);
-    creature.lookAt(camera.position.x, creature.position.y, camera.position.z);
-    creature.visible = true;
-  } else {
-    creature.userData.moveTarget = target.clone();
-  }
-}
-
-// ---------- Audio ----------
 async function createPlopBuffer(audioCtx) {
-  const duration = 0.18;
-  const sampleRate = audioCtx.sampleRate;
+  const duration = 0.18, sampleRate = audioCtx.sampleRate;
   const frameCount = Math.floor(duration * sampleRate);
   const buffer = audioCtx.createBuffer(1, frameCount, sampleRate);
   const data = buffer.getChannelData(0);
-
-  const startFreq = 900;
-  const endFreq   = 220;
+  const startFreq = 900, endFreq = 220;
   for (let i=0; i<frameCount; i++) {
     const t = i / sampleRate;
     const f = endFreq + (startFreq - endFreq) * Math.pow(1 - t/duration, 3);
@@ -329,6 +257,7 @@ async function createPlopBuffer(audioCtx) {
   }
   return buffer;
 }
+
 function playPlopAt(positionVec3) {
   if (!plopBuffer) return;
   const sound = new THREE.PositionalAudio(listener);
@@ -345,14 +274,12 @@ function playPlopAt(positionVec3) {
   setTimeout(()=> { scene.remove(dummy); }, 400);
 }
 
-// ---------- Partikel ----------
 function spawnBurst(center) {
   const COUNT = 80, SPEED = 0.6, LIFE = 0.7, SIZE = 0.02;
   const geom = new THREE.BufferGeometry();
   const pos  = new Float32Array(COUNT * 3);
   const col  = new Float32Array(COUNT * 3);
   const vel  = new Float32Array(COUNT * 3);
-
   for (let i=0; i<COUNT; i++) {
     const u = Math.random(), v = Math.random();
     const theta = 2 * Math.PI * u;
@@ -361,30 +288,26 @@ function spawnBurst(center) {
     const dx = Math.sin(phi) * Math.cos(theta);
     const dy = Math.cos(phi);
     const dz = Math.sin(phi) * Math.sin(theta);
-
     pos[i*3]   = center.x + dx * r;
     pos[i*3+1] = center.y + dy * r + 0.02;
     pos[i*3+2] = center.z + dz * r;
-
     const s = SPEED * (0.4 + Math.random()*0.9);
     vel[i*3]   = dx * s;
     vel[i*3+1] = dy * s + 0.2;
     vel[i*3+2] = dz * s;
-
     const mix = Math.random()*0.6 + 0.4;
     col[i*3]   = 0.4*mix + 0.6;
     col[i*3+1] = 1.0;
     col[i*3+2] = 0.9*mix + 0.1;
   }
-
   geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geom.setAttribute('color',    new THREE.BufferAttribute(col, 3));
-
   const mat = new THREE.PointsMaterial({ size: SIZE, vertexColors: true, transparent: true, opacity: 0.95, depthWrite: false });
   const points = new THREE.Points(geom, mat);
   scene.add(points);
   bursts.push({ points, material: mat, velocities: vel, life: LIFE });
 }
+
 function updateBursts(dt) {
   for (let i = bursts.length - 1; i >= 0; i--) {
     const b = bursts[i];
@@ -392,7 +315,6 @@ function updateBursts(dt) {
     const geom = b.points.geometry;
     const pos  = geom.attributes.position.array;
     const vel  = b.velocities;
-
     for (let j=0; j<vel.length/3; j++) {
       vel[j*3+1] -= 1.6 * dt;
       pos[j*3]   += vel[j*3]   * dt;
@@ -413,100 +335,130 @@ function updateBursts(dt) {
   }
 }
 
-// ---------- Render Loop ----------
+function onWindowResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function onSelect() {
+  if (!reticle.visible) return;
+  const target = new THREE.Vector3().setFromMatrixPosition(reticle.matrix);
+  target.y -= 0.03;
+  spawnBurst(target);
+  playPlopAt(target);
+  if (!creature.visible) {
+    creature.position.copy(target);
+    creature.lookAt(camera.position.x, creature.position.y, camera.position.z);
+    creature.visible = true;
+  } else {
+    creature.userData.moveTarget = target.clone();
+  }
+}
+
+// --- Plane-Mesh nur wenn verfügbar ---
+function triangleFanIndices(n){ const idx=[]; for(let i=1;i<n-1;i++) idx.push(0,i,i+1); return idx; }
+function createPlaneMesh(plane){
+  const n = plane.polygon.length;
+  const positions = new Float32Array(n*3);
+  for (let i=0;i<n;i++){ const p = plane.polygon[i]; positions.set([p.x,p.y,p.z], i*3); }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setIndex(triangleFanIndices(n));
+  geom.computeVertexNormals();
+  const material = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent:true, opacity:0.18, side:THREE.DoubleSide });
+  const mesh = new THREE.Mesh(geom, material); mesh.renderOrder = -1; return mesh;
+}
+function updatePlaneMesh(mesh, plane){
+  const n = plane.polygon.length;
+  const arr = mesh.geometry.attributes.position.array;
+  for (let i=0;i<n;i++){ const p=plane.polygon[i]; arr[i*3]=p.x; arr[i*3+1]=p.y; arr[i*3+2]=p.z; }
+  mesh.geometry.attributes.position.needsUpdate = true;
+  mesh.geometry.computeVertexNormals();
+}
+function onPlaneAdded(e){ if(!planeDetectionActive) return; const m=createPlaneMesh(e.plane); planeMeshes.set(e.plane,m); scene.add(m); }
+function onPlaneUpdated(e){ if(!planeDetectionActive) return; const m=planeMeshes.get(e.plane); if(m) updatePlaneMesh(m,e.plane); }
+function onPlaneRemoved(e){ if(!planeDetectionActive) return; const m=planeMeshes.get(e.plane); if(m){ scene.remove(m); planeMeshes.delete(e.plane); } }
+
+// --- Renderloop ---
 function render(timestamp, frame) {
   const dt = clock.getDelta();
 
-  if (frame) {
-    const session = renderer.xr.getSession();
-    const referenceSpace = renderer.xr.getReferenceSpace();
+  try {
+    if (frame) {
+      const session = renderer.xr.getSession();
+      const referenceSpace = renderer.xr.getReferenceSpace();
 
-    if (!hitTestSourceRequested) {
-      session.requestReferenceSpace('viewer').then((ref) => {
-        session.requestHitTestSource({ space: ref }).then((source) => { hitTestSource = source; });
-      }).catch(()=>{});
-      session.addEventListener('end', () => { hitTestSourceRequested = false; hitTestSource = null; });
-      hitTestSourceRequested = true;
-    }
-
-    if (hitTestSource) {
-      const hits = frame.getHitTestResults(hitTestSource);
-      let shown = false;
-
-      if (hits.length > 0) {
-        // horizontale Treffer bevorzugen
-        let chosen = hits[0];
-        const upWorld = new THREE.Vector3(0,1,0);
-        for (const h of hits) {
-          const pose = h.getPose(referenceSpace);
-          if (!pose) continue;
-          const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
-          const up = new THREE.Vector3(0,1,0).applyMatrix3(new THREE.Matrix3().setFromMatrix4(m)).normalize();
-          if (up.dot(upWorld) > 0.85) { chosen = h; break; }
-        }
-        const pose = chosen.getPose(referenceSpace);
-        if (pose) {
-          reticle.visible = true;
-          reticle.matrix.fromArray(pose.transform.matrix);
-
-          // Reticle-Animation
-          const t = timestamp * 0.004;
-          const s = 1.0 + Math.sin(t) * 0.06;
-          const mat = reticle.matrix.clone();
-          const pos = new THREE.Vector3(); const quat = new THREE.Quaternion(); const scl = new THREE.Vector3();
-          mat.decompose(pos, quat, scl);
-          reticle.matrix.compose(pos.add(new THREE.Vector3(0, 0.003*Math.sin(t*2.5), 0)), quat, new THREE.Vector3(s,1,s));
-          shown = true;
-        }
+      if (!hitTestSourceRequested && session) {
+        session.requestReferenceSpace('viewer').then((ref) => {
+          session.requestHitTestSource({ space: ref }).then((source) => { hitTestSource = source; });
+        }).catch(err => console.warn('[hit-test] requestReferenceSpace failed:', err));
+        session.addEventListener('end', () => { hitTestSourceRequested = false; hitTestSource = null; });
+        hitTestSourceRequested = true;
       }
-      if (!shown) reticle.visible = false;
+
+      if (hitTestSource) {
+        const hits = frame.getHitTestResults(hitTestSource);
+        let shown = false;
+        if (hits.length > 0) {
+          let chosen = hits[0];
+          const upWorld = new THREE.Vector3(0,1,0);
+          for (const h of hits) {
+            const pose = h.getPose(referenceSpace); if (!pose) continue;
+            const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
+            const up = new THREE.Vector3(0,1,0).applyMatrix3(new THREE.Matrix3().setFromMatrix4(m)).normalize();
+            if (up.dot(upWorld) > 0.85) { chosen = h; break; }
+          }
+          const pose = chosen.getPose(referenceSpace);
+          if (pose) {
+            reticle.visible = true;
+            reticle.matrix.fromArray(pose.transform.matrix);
+            const t = timestamp * 0.004;
+            const s = 1.0 + Math.sin(t) * 0.06;
+            const mat = reticle.matrix.clone();
+            const pos = new THREE.Vector3(); const quat = new THREE.Quaternion(); const scl = new THREE.Vector3();
+            mat.decompose(pos, quat, scl);
+            reticle.matrix.compose(pos.add(new THREE.Vector3(0, 0.003*Math.sin(t*2.5), 0)), quat, new THREE.Vector3(s,1,s));
+            shown = true;
+          }
+        }
+        if (!shown) reticle.visible = false;
+      }
     }
+
+    if (creature.visible) {
+      const u = creature.userData;
+      const a = u.animationState;
+      if (u.moveTarget) {
+        creature.position.lerp(u.moveTarget, Math.min(1, dt * 6));
+        if (creature.position.distanceTo(u.moveTarget) < 0.005) u.moveTarget = null;
+      }
+      a.breath += dt * 2.0;
+      const breathScale = 1 + Math.sin(a.breath) * 0.025;
+      u.body.scale.setScalar(breathScale);
+      a.headPhase += dt * 1.2;
+      u.head.rotation.y = Math.sin(a.headPhase) * 0.1;
+      u.head.position.y = 0.28 + Math.sin(a.headPhase * 1.6) * 0.005;
+      a.tailPhase += dt * 4.0;
+      u.tail.rotation.x = Math.PI/4 + Math.sin(a.tailPhase) * 0.28;
+      u.tail.rotation.y = Math.sin(a.tailPhase * 0.9) * 0.4;
+      a.blinkTimer += dt;
+      if (a.blinkTimer > 2.5 + Math.random()*2) {
+        a.blinkTimer = 0;
+        u.eyelids.forEach(eyelid => { eyelid.scale.y = 1; setTimeout(()=> eyelid.scale.y = 0, 135); });
+      }
+      const toCam = new THREE.Vector3(camera.position.x, creature.position.y, camera.position.z);
+      const look = new THREE.Vector3().copy(toCam).sub(creature.position).normalize();
+      const targetYaw = Math.atan2(look.x, look.z);
+      creature.rotation.y = THREE.MathUtils.damp(creature.rotation.y, targetYaw, 8, dt);
+    }
+
+    updateBursts(dt);
+  } catch (err) {
+    console.error('[render] Fehler:', err);
+    setStatus('Status: <span class="warn">Runtime-Fehler – siehe Konsole</span>');
   }
 
-  if (creature.visible) {
-    const u = creature.userData;
-    const a = u.animationState;
-
-    if (u.moveTarget) {
-      creature.position.lerp(u.moveTarget, Math.min(1, dt * 6));
-      if (creature.position.distanceTo(u.moveTarget) < 0.005) u.moveTarget = null;
-    }
-
-    a.breath += dt * 2.0;
-    const breathScale = 1 + Math.sin(a.breath) * 0.025;
-    u.body.scale.setScalar(breathScale);
-
-    a.headPhase += dt * 1.2;
-    u.head.rotation.y = Math.sin(a.headPhase) * 0.1;
-    u.head.position.y = 0.28 + Math.sin(a.headPhase * 1.6) * 0.005;
-
-    a.tailPhase += dt * 4.0;
-    u.tail.rotation.x = Math.PI/4 + Math.sin(a.tailPhase) * 0.28;
-    u.tail.rotation.y = Math.sin(a.tailPhase * 0.9) * 0.4;
-
-    a.blinkTimer += dt;
-    if (a.blinkTimer > 2.5 + Math.random()*2) {
-      a.blinkTimer = 0;
-      u.eyelids.forEach(eyelid => {
-        eyelid.scale.y = 1;
-        setTimeout(()=> eyelid.scale.y = 0, 135);
-      });
-    }
-
-    a.hopCooldown -= dt;
-    if (a.hopCooldown <= 0) {
-      a.hopCooldown = 2.5 + Math.random()*2.5;
-      creature.position.y += 0.02;
-      setTimeout(()=> { creature.position.y -= 0.02; }, 160);
-    }
-
-    const toCam = new THREE.Vector3(camera.position.x, creature.position.y, camera.position.z);
-    const look = new THREE.Vector3().copy(toCam).sub(creature.position).normalize();
-    const targetYaw = Math.atan2(look.x, look.z);
-    creature.rotation.y = THREE.MathUtils.damp(creature.rotation.y, targetYaw, 8, dt);
-  }
-
-  updateBursts(dt);
   renderer.render(scene, camera);
 }
 </script>
