@@ -2,28 +2,47 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <title>WebXR AR – Mehrere Pokémon-artige Wesen + Capture + SFX</title>
+  <title>WebXR AR – Pokémon Capture</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     html, body { margin:0; padding:0; overflow:hidden; background:transparent; font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
-    #ui { position:fixed; inset:0; pointer-events:none; display:flex; align-items:flex-end; justify-content:center; padding:16px; }
-    .hint { pointer-events:auto; background:rgba(0,0,0,.55); color:#fff; padding:10px 12px; border-radius:12px; font-size:14px; backdrop-filter: blur(6px); max-width:min(90vw,720px); }
-    .actions { position:fixed; top:12px; right:12px; display:flex; gap:8px; pointer-events:auto; }
-    .btn { border:0; border-radius:10px; padding:8px 12px; font-size:14px; cursor:pointer; background:#111; color:#fff; opacity:.9; }
+    #ui {
+      position:fixed; inset:0; pointer-events:none;
+      display:flex; align-items:flex-end; justify-content:center;
+      padding:16px;
+    }
+    .hint {
+      pointer-events:auto;
+      background:rgba(0,0,0,.55);
+      color:#fff;
+      padding:10px 12px; border-radius:12px; font-size:14px;
+      backdrop-filter: blur(6px);
+      max-width:min(90vw,720px);
+    }
+    .actions {
+      position:fixed; top:12px; right:12px; display:flex; gap:8px; pointer-events:auto;
+    }
+    .btn {
+      border:0; border-radius:10px; padding:8px 12px; font-size:14px; cursor:pointer;
+      background:#111; color:#fff; opacity:.9;
+    }
     .btn:active { transform: translateY(1px); }
     .hidden { display:none !important; }
-    .legend { position:fixed; left:12px; bottom:12px; font-size:12px; color:#fff; opacity:.75; pointer-events:auto; background:rgba(0,0,0,.45); padding:6px 8px; border-radius:8px; }
+    .legend {
+      position:fixed; left:12px; bottom:12px; font-size:12px; color:#fff; opacity:.75; pointer-events:auto;
+      background:rgba(0,0,0,.45); padding:6px 8px; border-radius:8px;
+    }
   </style>
 </head>
 <body>
   <div id="ui">
     <div id="hint" class="hint">
-      Scanne Flächen. <b>Controller 0:</b> Platzieren/Hüpfen (setzt zufällig eins von 4 Wesen). 
-      <b>Controller 1:</b> Kugel werfen zum Fangen.
+      Bewege das Headset/Smartphone, bis Flächen erkannt sind. <b>Controller 0: Select</b> zum Platzieren/Hüpfen. 
+      <b>Controller 1: Select</b> wirft die Poké-Kugel zum Fangen.
     </div>
   </div>
   <div class="actions hidden" id="actions">
-    <button class="btn" id="reposition">Neu platzieren (zufällig)</button>
+    <button class="btn" id="reposition">Neu platzieren</button>
     <button class="btn" id="remove">Entfernen</button>
   </div>
   <div class="legend" id="legend">Gelbe Flächen = erkannte Ebenen (blenden nach kurzer Zeit aus)</div>
@@ -35,14 +54,15 @@ import { ARButton } from 'https://unpkg.com/three@0.152.2/examples/jsm/webxr/ARB
 let camera, scene, renderer;
 let controller0, controller1;
 let reticle;
-let currentMon = null;
-let shadowPlane;
-let hitTestSource = null, hitTestSourceRequested = false;
+let creature, shadowPlane;
+let hitTestSource = null;
+let hitTestSourceRequested = false;
 const planeMeshes = new Map();
 
 let dirLight, hemiLight;
 let xrLightProbe = null, xrGlBinding = null;
-let allowPlaneDebug = true, lastPlaneSeenAt = 0;
+let allowPlaneDebug = true;
+let lastPlaneSeenAt = 0;
 let placingMode = true;
 const tmpVec3 = new THREE.Vector3();
 let lastTime = 0;
@@ -50,86 +70,14 @@ let lastTime = 0;
 // Capture-States
 let isCaptured = false;
 let pokeBall = null;
-let captureState = null;  // null | 'fly' | 'hover' | 'suck' | 'fall'
-let captureT = 0;
-let captureData = null;
+let captureState = null; // null | 'fly' | 'hover' | 'suck' | 'fall'
+let captureT = 0;        // zeitliche Progression je Phase
+let captureData = null;  // { start, mid, target, groundY, velY, duration }
 
-// --- WebAudio (SFX) ---
-let audioCtx = null;
-let audioUnlocked = false;
-
-function unlockAudio() {
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  if (audioCtx && audioCtx.state === 'suspended') {
-    audioCtx.resume();
-  }
-  audioUnlocked = true;
+function lerpAngle(a, b, t) {
+  let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
+  return a + diff * t;
 }
-
-function playGainEnv(node, duration=0.2, attack=0.01, release=0.15, peak=0.9) {
-  const g = audioCtx.createGain();
-  g.gain.setValueAtTime(0, audioCtx.currentTime);
-  g.gain.linearRampToValueAtTime(peak, audioCtx.currentTime + attack);
-  g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
-  node.connect(g).connect(audioCtx.destination);
-  return g;
-}
-
-// Whoosh: kurzes Rauschen mit Highpass + Pitch-Fall
-function playWhoosh() {
-  if (!audioUnlocked) return;
-  const dur = 0.35;
-  const bufferSize = Math.floor(dur * audioCtx.sampleRate);
-  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * 0.5;
-  const src = audioCtx.createBufferSource();
-  src.buffer = buffer;
-  const hp = audioCtx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.setValueAtTime(600, audioCtx.currentTime);
-  hp.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + dur * 0.7);
-  const g = playGainEnv(src, dur, 0.01, 0.3, 0.8);
-  src.connect(hp).connect(g);
-  src.start(); src.stop(audioCtx.currentTime + dur + 0.05);
-}
-
-// Suction: tiefer Sinus + Bandpass-Rauschen, Pitch-Sweep nach unten
-function playSuck() {
-  if (!audioUnlocked) return;
-  const dur = 0.7;
-  const osc = audioCtx.createOscillator(); osc.type = 'sine';
-  osc.frequency.setValueAtTime(380, audioCtx.currentTime);
-  osc.frequency.exponentialRampToValueAtTime(120, audioCtx.currentTime + dur);
-  const bufferSize = Math.floor(dur * audioCtx.sampleRate);
-  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * 0.35;
-  const noise = audioCtx.createBufferSource(); noise.buffer = buffer;
-  const bp = audioCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.setValueAtTime(500, audioCtx.currentTime);
-  bp.frequency.exponentialRampToValueAtTime(250, audioCtx.currentTime + dur); bp.Q.value = 5;
-  const gMain = playGainEnv(osc, dur, 0.02, 0.6, 0.6);
-  const gNoise = playGainEnv(noise, dur, 0.02, 0.6, 0.35);
-  noise.connect(bp).connect(gNoise);
-  osc.start(); noise.start();
-  osc.stop(audioCtx.currentTime + dur + 0.05);
-  noise.stop(audioCtx.currentTime + dur + 0.05);
-}
-
-// Click/Thunk: kurzer Pitch-Down „Plopp“
-function playClick() {
-  if (!audioUnlocked) return;
-  const dur = 0.18;
-  const osc = audioCtx.createOscillator(); osc.type = 'triangle';
-  osc.frequency.setValueAtTime(500, audioCtx.currentTime);
-  osc.frequency.exponentialRampToValueAtTime(150, audioCtx.currentTime + dur);
-  const bp = audioCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 220; bp.Q.value = 8;
-  const g = playGainEnv(osc, dur, 0.005, 0.16, 0.7);
-  osc.connect(bp).connect(g);
-  osc.start(); osc.stop(audioCtx.currentTime + dur + 0.05);
-}
-
-function lerpAngle(a, b, t) { let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI; return a + diff * t; }
 
 init();
 
@@ -145,17 +93,17 @@ function init() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
 
-  // *** Wichtig: Plane-Detection nur optional ***
   const btn = ARButton.createButton(renderer, {
-    requiredFeatures: ['hit-test'], // nur hit-test ist Pflicht
-    optionalFeatures: ['plane-detection','dom-overlay','light-estimation'],
+    requiredFeatures: ['hit-test', 'plane-detection'],
+    optionalFeatures: ['dom-overlay','light-estimation'],
     domOverlay: { root: document.body }
   });
   document.body.appendChild(btn);
 
-  // Lights
+  // Beleuchtung
   hemiLight = new THREE.HemisphereLight(0xffffff, 0x666688, 0.9);
   scene.add(hemiLight);
+
   dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
   dirLight.position.set(0.5, 1.2, 0.5);
   dirLight.castShadow = true;
@@ -170,223 +118,193 @@ function init() {
     new THREE.RingGeometry(0.12, 0.18, 40).rotateX(-Math.PI / 2),
     new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent:true, opacity:0.9 })
   );
-  reticle.matrixAutoUpdate = false; reticle.visible = false; scene.add(reticle);
+  reticle.matrixAutoUpdate = false;
+  reticle.visible = false;
+  scene.add(reticle);
+
   const inner = new THREE.Mesh(
     new THREE.CircleGeometry(0.12, 32).rotateX(-Math.PI/2),
     new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent:true, opacity:0.15 })
   );
   reticle.add(inner);
 
-  // Schattenfläche
+  // Kreatur
+  creature = buildCreature();
+  creature.visible = false;
+  scene.add(creature);
+
+  // Kontakt-Schattenfläche
   shadowPlane = new THREE.Mesh(
     new THREE.CircleGeometry(0.16, 32).rotateX(-Math.PI/2),
     new THREE.ShadowMaterial({ opacity: 0.35 })
   );
-  shadowPlane.receiveShadow = true; shadowPlane.visible = false; scene.add(shadowPlane);
+  shadowPlane.receiveShadow = true;
+  shadowPlane.visible = false;
+  scene.add(shadowPlane);
 
   // Controller
-  controller0 = renderer.xr.getController(0);
-  controller0.addEventListener('select', () => { unlockAudio(); onSelectPrimary(); });
+  controller0 = renderer.xr.getController(0); // Platzieren/Hüpfen
+  controller0.addEventListener('select', onSelectPrimary);
   scene.add(controller0);
-  controller1 = renderer.xr.getController(1);
-  controller1.addEventListener('select', () => { unlockAudio(); onSelectCapture(); });
+
+  controller1 = renderer.xr.getController(1); // Poké-Kugel
+  controller1.addEventListener('select', onSelectCapture);
   scene.add(controller1);
 
-  // UI
-  document.getElementById('reposition').onclick = () => { placingMode = true; showHint("Reticle anvisieren & Select → neues, zufälliges Wesen."); };
-  document.getElementById('remove').onclick = removeCurrent;
-
-  // Poké-Kugel
-  pokeBall = buildPokeBall(); pokeBall.visible = false; scene.add(pokeBall);
-
-  // Session Events
   renderer.xr.addEventListener('sessionstart', onSessionStart);
   window.addEventListener('resize', onWindowResize);
+
+  // UI
+  document.getElementById('reposition').onclick = () => { placingMode = true; showHint("Ziel anvisieren & Select drücken, um neu zu platzieren."); };
+  document.getElementById('remove').onclick = () => removeCreature();
+
+  // Poké-Kugel vorbereiten
+  pokeBall = buildPokeBall();
+  pokeBall.visible = false;
+  scene.add(pokeBall);
 
   renderer.setAnimationLoop(render);
 }
 
-// ====== Session & Resize ======
 function onSessionStart() {
   const session = renderer.xr.getSession();
-
-  // Plane Detection nur versuchen, wenn verfügbar
-  try {
-    session.updateWorldTrackingState?.({ planeDetectionState: { enabled: true } });
-    session.addEventListener?.('planeadded', onPlaneAdded);
-    session.addEventListener?.('planeremoved', onPlaneRemoved);
-    session.addEventListener?.('planeupdated', onPlaneUpdated);
-  } catch (e) {
-    console.warn('Plane detection not available:', e);
-  }
+  // Plane Detection Events
+  session.updateWorldTrackingState({ planeDetectionState: { enabled: true } });
+  session.addEventListener('planeadded', onPlaneAdded);
+  session.addEventListener('planeremoved', onPlaneRemoved);
+  session.addEventListener('planeupdated', onPlaneUpdated);
 
   // Light Estimation (optional)
   try {
     if (session.requestLightProbe) {
       xrGlBinding = new XRWebGLBinding(session, renderer.getContext());
-      session.requestLightProbe({}).then(lp => { xrLightProbe = lp; }).catch(()=>{ xrLightProbe = null; });
+      session.requestLightProbe({}).then(lp => {
+        xrLightProbe = lp;
+      }).catch(()=>{ xrLightProbe = null; });
     }
   } catch { xrLightProbe = null; }
 
-  showHint("Bewegen, bis Flächen erkannt sind. C0: Platzieren/Hüpfen. C1: Kugel werfen.");
-}
-function onWindowResize(){ camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
-
-// ====== Creature Factory (alles aus Formen) ======
-function finalizeMon(g) {
-  if (!g.userData) g.userData = {};
-  if (!g.userData.animationState) g.userData.animationState = {breathPhase:0, blinkTimer:0, headBobPhase:0, tailWagPhase:0, jumpPhase:0, jumping:false, walkPhase:0};
-  if (!g.userData.feet) g.userData.feet = [];
-  if (g.userData.footBaseY === undefined) g.userData.footBaseY = 0.03;
-  return g;
+  showHint("Bewegen, bis Flächen erkannt sind. Controller 0: Platzieren. Controller 1: Poké-Kugel werfen.");
 }
 
-// 1) Klassik
-function buildClassic() {
+function onWindowResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+/* --------- Creature ---------- */
+function buildCreature() {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.12,20,20), new THREE.MeshStandardMaterial({ color:0xff6b6b, roughness:0.35, metalness:0.05 }));
+
+  const body = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 20, 20),
+    new THREE.MeshStandardMaterial({ color: 0xff6b6b, roughness:0.35, metalness:0.05 })
+  );
   body.castShadow = true; body.position.y = 0.12;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.08,20,20), new THREE.MeshStandardMaterial({ color:0xff8e8e, roughness:0.25, metalness:0.1 }));
+
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.08, 20, 20),
+    new THREE.MeshStandardMaterial({ color: 0xff8e8e, roughness:0.25, metalness:0.1 })
+  );
   head.castShadow = true; head.position.set(0,0.28,0);
-  const eyeGeom = new THREE.SphereGeometry(0.025,12,12);
-  const eyeMat = new THREE.MeshStandardMaterial({ color:0x111111, roughness:0.4, metalness:0.3 });
-  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.03,0.3,0.07); eye1.castShadow = true;
+
+  const eyeGeom = new THREE.SphereGeometry(0.025, 12, 12);
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness:0.4, metalness:0.3 });
+  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.03, 0.3, 0.07); eye1.castShadow = true;
   const eye2 = eye1.clone(); eye2.position.x = 0.03;
-  const eyelidGeom = new THREE.SphereGeometry(0.026,12,6,0,Math.PI*2,0,Math.PI*0.5);
-  const eyelidMat = new THREE.MeshStandardMaterial({ color:0xff8e8e });
+
+  const eyelidGeom = new THREE.SphereGeometry(0.026, 12, 6, 0, Math.PI * 2, 0, Math.PI * 0.5);
+  const eyelidMat = new THREE.MeshStandardMaterial({ color: 0xff8e8e });
   const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
   const eyelid2 = eyelid1.clone(); eyelid2.position.copy(eye2.position); eyelid2.position.y += 0.01;
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.015,0.03,8), new THREE.MeshStandardMaterial({ color:0xff4757 }));
+
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.015, 0.03, 8), new THREE.MeshStandardMaterial({ color: 0xff4757 }));
   nose.position.set(0,0.28,0.08); nose.rotation.x = Math.PI/2; nose.castShadow = true;
-  const cheek1 = new THREE.Mesh(new THREE.CircleGeometry(0.02,16), new THREE.MeshStandardMaterial({ color:0xff3838, transparent:true, opacity:0.8 })); cheek1.position.set(-0.06,0.26,0.06);
+
+  const cheekGeom = new THREE.CircleGeometry(0.02, 16);
+  const cheekMat = new THREE.MeshStandardMaterial({ color: 0xff3838, transparent:true, opacity:0.8 });
+  const cheek1 = new THREE.Mesh(cheekGeom, cheekMat); cheek1.position.set(-0.06,0.26,0.06);
   const cheek2 = cheek1.clone(); cheek2.position.x = 0.06;
-  const footGeom = new THREE.SphereGeometry(0.03,12,12);
-  const footMat = new THREE.MeshStandardMaterial({ color:0xc44569 });
-  const foot1 = new THREE.Mesh(footGeom, footMat); foot1.position.set(-0.06,0.03,0.02); foot1.castShadow = true;
+
+  const footGeom = new THREE.SphereGeometry(0.03, 12, 12);
+  const footMat = new THREE.MeshStandardMaterial({ color: 0xc44569 });
+  const foot1 = new THREE.Mesh(footGeom, footMat); foot1.position.set(-0.06, 0.03, 0.02); foot1.castShadow = true;
   const foot2 = foot1.clone(); foot2.position.x = 0.06;
-  const earGeom = new THREE.ConeGeometry(0.02,0.06,8);
-  const earMat = new THREE.MeshStandardMaterial({ color:0xff6b6b });
+
+  const earGeom = new THREE.ConeGeometry(0.02, 0.06, 8);
+  const earMat = new THREE.MeshStandardMaterial({ color: 0xff6b6b });
   const ear1 = new THREE.Mesh(earGeom, earMat); ear1.position.set(-0.05,0.35,-0.02); ear1.rotation.z = -0.3; ear1.castShadow = true;
   const ear2 = ear1.clone(); ear2.position.x = 0.05; ear2.rotation.z = 0.3;
-  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.02,0.08,8), new THREE.MeshStandardMaterial({ color:0xff6b6b }));
+
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.08, 8), new THREE.MeshStandardMaterial({ color: 0xff6b6b }));
   tail.position.set(0,0.15,-0.1); tail.rotation.x = Math.PI/4; tail.castShadow = true;
+
   g.add(body, head, eye1, eye2, eyelid1, eyelid2, nose, cheek1, cheek2, foot1, foot2, ear1, ear2, tail);
-  g.userData = { body, head, eyes:[eye1,eye2], eyelids:[eyelid1,eyelid2], ears:[ear1,ear2], tail, feet:[foot1,foot2], footBaseY:0.03,
-    animationState:{breathPhase:0, blinkTimer:0, headBobPhase:0, tailWagPhase:0, jumpPhase:0, jumping:false, walkPhase:0} };
+
+  g.userData = {
+    body, head, eyes:[eye1,eye2], eyelids:[eyelid1,eyelid2], ears:[ear1,ear2], tail,
+    feet:[foot1, foot2], footBaseY:0.03,
+    animationState: { breathPhase:0, blinkTimer:0, headBobPhase:0, tailWagPhase:0, jumpPhase:0, jumping:false, walkPhase:0 }
+  };
   return g;
 }
 
-// 2) Elektro-Wuschel (Pikachu-Vibes, aber eigenständig)
-function buildElectric() {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.10,20,20), new THREE.MeshStandardMaterial({ color:0xffd83b, roughness:0.35, metalness:0.08 }));
-  body.castShadow = true; body.position.y = 0.10;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.07,20,20), new THREE.MeshStandardMaterial({ color:0xffe066, roughness:0.25, metalness:0.1 }));
-  head.castShadow = true; head.position.set(0,0.24,0);
-  const earGeom = new THREE.ConeGeometry(0.018,0.08,10);
-  const earMat = new THREE.MeshStandardMaterial({ color:0xffd83b });
-  const ear1 = new THREE.Mesh(earGeom, earMat); ear1.position.set(-0.045,0.31,-0.01); ear1.rotation.z = -0.25; ear1.castShadow = true;
-  const ear2 = ear1.clone(); ear2.position.x = 0.045; ear2.rotation.z = 0.25;
-  const tipMat = new THREE.MeshStandardMaterial({ color:0x2a2a2a });
-  const tip1 = new THREE.Mesh(new THREE.ConeGeometry(0.012,0.025,10), tipMat); tip1.position.copy(ear1.position); tip1.position.y += 0.06; tip1.rotation.z = ear1.rotation.z;
-  const tip2 = tip1.clone(); tip2.position.x = ear2.position.x; tip2.rotation.z = ear2.rotation.z;
-  const eye1 = new THREE.Mesh(new THREE.SphereGeometry(0.022,12,12), new THREE.MeshStandardMaterial({ color:0x111111 })); eye1.position.set(-0.028,0.26,0.06);
-  const eye2 = eye1.clone(); eye2.position.x = 0.028;
-  const cheek1 = new THREE.Mesh(new THREE.CircleGeometry(0.018,16), new THREE.MeshStandardMaterial({ color:0xff5959, transparent:true, opacity:0.9 })); cheek1.position.set(-0.05,0.235,0.05);
-  const cheek2 = cheek1.clone(); cheek2.position.x = 0.05;
-  const tail = new THREE.Group();
-  const segMat = new THREE.MeshStandardMaterial({ color:0xffd83b });
-  const s1 = new THREE.Mesh(new THREE.BoxGeometry(0.015,0.06,0.02), segMat); s1.position.set(0,0.12,-0.06);
-  const s2 = new THREE.Mesh(new THREE.BoxGeometry(0.015,0.06,0.02), segMat); s2.position.set(0.03,0.18,-0.075); s2.rotation.z = -0.6;
-  const s3 = new THREE.Mesh(new THREE.BoxGeometry(0.015,0.06,0.02), segMat); s3.position.set(-0.03,0.24,-0.09); s3.rotation.z = 0.6;
-  tail.add(s1,s2,s3);
-  const foot1 = new THREE.Mesh(new THREE.SphereGeometry(0.025,12,12), new THREE.MeshStandardMaterial({ color:0xe5b63a })); foot1.position.set(-0.05,0.025,0.02);
-  const foot2 = foot1.clone(); foot2.position.x = 0.05;
-  g.add(body, head, ear1, ear2, tip1, tip2, eye1, eye2, cheek1, cheek2, tail, foot1, foot2);
-  g.userData = { body, head, eyes:[eye1,eye2], eyelids:[], ears:[ear1,ear2], tail, feet:[foot1,foot2], footBaseY:0.025,
-    animationState:{breathPhase:0, blinkTimer:0, headBobPhase:0, tailWagPhase:0, jumpPhase:0, jumping:false, walkPhase:0} };
-  return g;
-}
-
-// 3) Schildkrötchen (Schiggy-Vibes, eigenständig)
-function buildTurtle() {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.09,20,20), new THREE.MeshStandardMaterial({ color:0x6ec6ff, roughness:0.4, metalness:0.05 }));
-  body.castShadow = true; body.position.y = 0.09;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.07,20,20), new THREE.MeshStandardMaterial({ color:0x8fd3ff, roughness:0.35, metalness:0.05 }));
-  head.position.set(0,0.23,0.02); head.castShadow = true;
-  const shell = new THREE.Mesh(new THREE.SphereGeometry(0.11,18,14), new THREE.MeshStandardMaterial({ color:0x9b6b3d, roughness:0.7, metalness:0.05 }));
-  shell.scale.set(1,0.6,1); shell.position.set(0,0.11,-0.03); shell.castShadow = true;
-  const shellRim = new THREE.Mesh(new THREE.TorusGeometry(0.095, 0.018, 8, 32), new THREE.MeshStandardMaterial({ color:0xf0d6a2, roughness:0.6 }));
-  shellRim.position.copy(shell.position); shellRim.rotation.x = Math.PI/2;
-  const eye1 = new THREE.Mesh(new THREE.SphereGeometry(0.02,12,12), new THREE.MeshStandardMaterial({ color:0x111111 })); eye1.position.set(-0.025,0.25,0.07);
-  const eye2 = eye1.clone(); eye2.position.x = 0.025;
-  const foot1 = new THREE.Mesh(new THREE.SphereGeometry(0.025,12,12), new THREE.MeshStandardMaterial({ color:0x8fd3ff })); foot1.position.set(-0.05,0.02,0.02);
-  const foot2 = foot1.clone(); foot2.position.x = 0.05;
-  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.016,0.05,8), new THREE.MeshStandardMaterial({ color:0x6ec6ff })); tail.position.set(0,0.10,-0.11); tail.rotation.x = Math.PI/1.8;
-  g.add(body, head, shell, shellRim, eye1, eye2, foot1, foot2, tail);
-  g.userData = { body, head, eyes:[eye1,eye2], eyelids:[], ears:[], tail, feet:[foot1,foot2], footBaseY:0.02,
-    animationState:{breathPhase:0, blinkTimer:0, headBobPhase:0, tailWagPhase:0, jumpPhase:0, jumping:false, walkPhase:0} };
-  return g;
-}
-
-// 4) Feuer-Echse (Glumanda-Vibes, eigenständig)
-function buildFireLizard() {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.13,20,20), new THREE.MeshStandardMaterial({ color:0xff7f3f, roughness:0.35, metalness:0.06 }));
-  body.castShadow = true; body.position.y = 0.13;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.085,20,20), new THREE.MeshStandardMaterial({ color:0xff9b5e, roughness:0.3, metalness:0.08 }));
-  head.castShadow = true; head.position.set(0,0.29,0.01);
-  const eye1 = new THREE.Mesh(new THREE.SphereGeometry(0.024,12,12), new THREE.MeshStandardMaterial({ color:0x111111 })); eye1.position.set(-0.03,0.30,0.07);
-  const eye2 = eye1.clone(); eye2.position.x = 0.03;
-  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.10,16,12), new THREE.MeshStandardMaterial({ color:0xffd0a6, roughness:0.6 }));
-  belly.scale.set(0.85,0.5,0.85); belly.position.set(0,0.09,0.03);
-  const tail = new THREE.Group();
-  const tBase = new THREE.Mesh(new THREE.ConeGeometry(0.022,0.11,10), new THREE.MeshStandardMaterial({ color:0xff7f3f })); tBase.position.set(0,0.15,-0.11); tBase.rotation.x = Math.PI/3;
-  const flame = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), new THREE.MeshStandardMaterial({ color:0xffc107, emissive:0xff6d00, emissiveIntensity:0.6 })); flame.position.set(0,0.24,-0.16);
-  tail.add(tBase, flame);
-  const foot1 = new THREE.Mesh(new THREE.SphereGeometry(0.03,12,12), new THREE.MeshStandardMaterial({ color:0xff9b5e })); foot1.position.set(-0.06,0.03,0.02); foot1.castShadow = true;
-  const foot2 = foot1.clone(); foot2.position.x = 0.06;
-  g.add(body, head, eye1, eye2, belly, tail, foot1, foot2);
-  g.userData = { body, head, eyes:[eye1,eye2], eyelids:[], ears:[], tail, feet:[foot1,foot2], footBaseY:0.03,
-    animationState:{breathPhase:0, blinkTimer:0, headBobPhase:0, tailWagPhase:0, jumpPhase:0, jumping:false, walkPhase:0} };
-  return g;
-}
-
-// zufällig wählen
-const SPECIES = [
-  { name:'classic', builder: buildClassic,    scale: 1.00 },
-  { name:'electric', builder: buildElectric,  scale: 0.85 },
-  { name:'turtle',   builder: buildTurtle,    scale: 0.70 },
-  { name:'fire',     builder: buildFireLizard,scale: 1.15 }
-];
-function createRandomMon() {
-  const spec = SPECIES[Math.floor(Math.random()*SPECIES.length)];
-  const g = finalizeMon(spec.builder());
-  g.scale.setScalar(spec.scale);
-  g.userData.species = spec.name;
-  return g;
-}
-
-// ====== Poké-Kugel ======
+/* --------- Poké-Kugel ---------- */
 function buildPokeBall() {
   const group = new THREE.Group();
   const r = 0.06;
-  const hemiTop = new THREE.Mesh(new THREE.SphereGeometry(r,24,16,0,Math.PI*2,0,Math.PI/2), new THREE.MeshStandardMaterial({ color:0xd11b1b, metalness:0.2, roughness:0.4 })); hemiTop.castShadow = true;
-  const hemiBot = new THREE.Mesh(new THREE.SphereGeometry(r,24,16,0,Math.PI*2,Math.PI/2,Math.PI/2), new THREE.MeshStandardMaterial({ color:0xffffff, metalness:0.05, roughness:0.6 })); hemiBot.castShadow = true;
-  const band = new THREE Mesh(new THREE.TorusGeometry(r*0.72, r*0.08, 10, 32), new THREE.MeshStandardMaterial({ color:0x111111, metalness:0.3, roughness:0.3 })); 
-  band.rotation.x = Math.PI/2; band.castShadow = true;
-  const buttonOuter = new THREE.Mesh(new THREE.CylinderGeometry(r*0.16, r*0.16, r*0.06, 20), new THREE.MeshStandardMaterial({ color:0xeeeeee, metalness:0.1, roughness:0.5 })); buttonOuter.position.z = r*0.72; buttonOuter.rotation.x = Math.PI/2;
-  const buttonInner = new THREE.Mesh(new THREE.CylinderGeometry(r*0.10, r*0.10, r*0.04, 20), new THREE.MeshStandardMaterial({ color:0x3ac5ff, emissive:0x004466, emissiveIntensity:0.2 })); buttonInner.position.copy(buttonOuter.position); buttonInner.rotation.copy(buttonOuter.rotation);
+
+  // obere Halbkugel (rot)
+  const hemiTop = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 24, 16, 0, Math.PI*2, 0, Math.PI/2),
+    new THREE.MeshStandardMaterial({ color: 0xd11b1b, metalness:0.2, roughness:0.4 })
+  );
+  hemiTop.castShadow = true;
+
+  // untere Halbkugel (weiß)
+  const hemiBot = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 24, 16, 0, Math.PI*2, Math.PI/2, Math.PI/2),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, metalness:0.05, roughness:0.6 })
+  );
+  hemiBot.castShadow = true;
+
+  // schwarzer Ring
+  const band = new THREE.Mesh(
+    new THREE.TorusGeometry(r*0.72, r*0.08, 10, 32),
+    new THREE.MeshStandardMaterial({ color: 0x111111, metalness:0.3, roughness:0.3 })
+  );
+  band.rotation.x = Math.PI/2;
+  band.castShadow = true;
+
+  // Knopf
+  const buttonOuter = new THREE.Mesh(
+    new THREE.CylinderGeometry(r*0.16, r*0.16, r*0.06, 20),
+    new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness:0.1, roughness:0.5 })
+  );
+  buttonOuter.position.z = r*0.72;
+  buttonOuter.rotation.x = Math.PI/2;
+
+  const buttonInner = new THREE.Mesh(
+    new THREE.CylinderGeometry(r*0.10, r*0.10, r*0.04, 20),
+    new THREE.MeshStandardMaterial({ color: 0x3ac5ff, emissive:0x004466, emissiveIntensity:0.2 })
+  );
+  buttonInner.position.copy(buttonOuter.position);
+  buttonInner.rotation.copy(buttonOuter.rotation);
+
   group.add(hemiTop, hemiBot, band, buttonOuter, buttonInner);
+  group.userData = { spinning:true };
   return group;
 }
 
-// ====== Plane Debug ======
+/* --------- Plane Debug Mesh ---------- */
 function createPlaneMesh(plane) {
   const geometry = new THREE.BufferGeometry();
   const positions = new Float32Array(plane.polygon.length * 3);
-  for (let i=0;i<plane.polygon.length;i++){ const p = plane.polygon[i]; positions.set([p.x,p.y,p.z], i*3); }
+  for (let i=0;i<plane.polygon.length;i++){
+    const p = plane.polygon[i];
+    positions.set([p.x,p.y,p.z], i*3);
+  }
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setIndex([...Array(plane.polygon.length).keys()]);
   const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, transparent:true, opacity: allowPlaneDebug ? 0.25 : 0.0, color: 0xffff00 });
@@ -394,84 +312,139 @@ function createPlaneMesh(plane) {
 }
 function updatePlaneMesh(mesh, plane) {
   const positions = mesh.geometry.attributes.position.array;
-  for (let i=0;i<plane.polygon.length;i++){ const p = plane.polygon[i]; positions[i*3]=p.x; positions[i*3+1]=p.y; positions[i*3+2]=p.z; }
+  for (let i=0;i<plane.polygon.length;i++){
+    const p = plane.polygon[i];
+    positions[i*3]   = p.x;
+    positions[i*3+1] = p.y;
+    positions[i*3+2] = p.z;
+  }
   mesh.geometry.attributes.position.needsUpdate = true;
 }
+
 function onPlaneAdded(e){ const mesh = createPlaneMesh(e.plane); planeMeshes.set(e.plane, mesh); scene.add(mesh); lastPlaneSeenAt = performance.now(); }
 function onPlaneUpdated(e){ const mesh = planeMeshes.get(e.plane); if (mesh) updatePlaneMesh(mesh, e.plane); lastPlaneSeenAt = performance.now(); }
 function onPlaneRemoved(e){ const mesh = planeMeshes.get(e.plane); if (mesh){ scene.remove(mesh); planeMeshes.delete(e.plane); } }
 
-// ====== UI ======
-function showHint(text, timeoutMs=3500){ const hint = document.getElementById('hint'); hint.textContent = text; hint.classList.remove('hidden'); if (timeoutMs>0) setTimeout(()=>hint.classList.add('hidden'), timeoutMs); }
+/* --------- UI helpers ---------- */
+function showHint(text, timeoutMs=3500){
+  const hint = document.getElementById('hint');
+  hint.textContent = text;
+  hint.classList.remove('hidden');
+  if (timeoutMs>0) setTimeout(()=>hint.classList.add('hidden'), timeoutMs);
+}
 function showActions(show){ document.getElementById('actions').classList.toggle('hidden', !show); }
 
-// ====== Input Handlers ======
+/* --------- Primary Controller (Platzieren/Hüpfen) ---------- */
 function onSelectPrimary() {
-  if (reticle.visible || placingMode) { placeRandomMonAtReticle(); placingMode = false; return; }
-  if (currentMon && currentMon.visible && !isCaptured) triggerJump(currentMon);
-}
-function onSelectCapture() {
-  if (!currentMon || !currentMon.visible || isCaptured || captureState) return;
-  playWhoosh(); // SFX: Wurf
-  const start = new THREE.Vector3(); controller1.getWorldPosition(start);
-  const target = currentMon.position.clone(); target.y += 0.55;
-  const mid = start.clone().lerp(target, 0.5); mid.y += 0.35;
-  const groundY = shadowPlane.visible ? shadowPlane.position.y : (currentMon.position.y - 0.03);
-  pokeBall.position.copy(start); pokeBall.visible = true; pokeBall.scale.set(1,1,1);
-  captureState = 'fly'; captureT = 0;
-  captureData = { start, mid, target, groundY, velY: 0, duration: 0.6 };
-  showHint("Kugel geworfen!", 1000);
+  if (reticle.visible || placingMode) {
+    placeCreatureAtReticle();
+    placingMode = false;
+    return;
+  }
+  if (creature.visible && !isCaptured) triggerJump();
 }
 
-// ====== Actions ======
-function placeRandomMonAtReticle(){
-  if (!reticle.visible) { showHint("Kein Ziel gefunden – bewege dich etwas.", 1800); return; }
-  if (currentMon) { scene.remove(currentMon); currentMon = null; }
-  currentMon = createRandomMon(); scene.add(currentMon);
-  currentMon.position.setFromMatrixPosition(reticle.matrix);
-  currentMon.position.y -= 0.03;
-  currentMon.rotation.set(0, 0, 0);
-  shadowPlane.position.copy(currentMon.position);
+/* --------- Secondary Controller (Poké-Kugel) ---------- */
+function onSelectCapture() {
+  if (!creature.visible || isCaptured || captureState) return; // nichts zu fangen
+  // Starte „Wurf“ von Controller1-Position Richtung Ziel über der Figur
+  const start = new THREE.Vector3();
+  controller1.getWorldPosition(start);
+
+  const target = creature.position.clone();
+  target.y += 0.55; // Punkt über der Figur, wo die Kugel „schwebt“
+
+  // kleine Bogenbahn: mid-Punkt etwas über der direkten Linie
+  const mid = start.clone().lerp(target, 0.5);
+  mid.y += 0.35;
+
+  // Bodenhöhe: da wir in AR keinen globalen Boden kennen, nutzen wir die Schattenplane
+  const groundY = shadowPlane.visible ? shadowPlane.position.y : (creature.position.y - 0.03);
+
+  // Kugel initialisieren
+  pokeBall.position.copy(start);
+  pokeBall.visible = true;
+  pokeBall.scale.set(1,1,1);
+  pokeBall.userData.spinning = true;
+
+  // Capture-Phasen setzen
+  captureState = 'fly';
+  captureT = 0;
+  captureData = {
+    start, mid, target,
+    groundY,
+    velY: 0,            // für die Fallphase
+    duration: 0.6       // Flugdauer bis über die Figur
+  };
+  showHint("Poké-Kugel geworfen!", 1200);
+}
+
+/* --------- Platzieren / Entfernen ---------- */
+function placeCreatureAtReticle(){
+  if (!reticle.visible) { showHint("Kein Ziel gefunden – bewege dich etwas.", 2000); return; }
+
+  creature.position.setFromMatrixPosition(reticle.matrix);
+  creature.position.y -= 0.03; // Füße auf Boden
+  creature.rotation.set(0, 0, 0); // aufrecht
+
+  // Schatten-Plane
+  shadowPlane.position.copy(creature.position);
   shadowPlane.position.y += 0.002;
   shadowPlane.visible = true;
-  currentMon.visible = true;
-  isCaptured = false;
+
+  creature.scale.set(1,1,1);
+  creature.visible = true;
+  isCaptured = false; // neu ausgesetzt = nicht mehr gefangen
   showActions(true);
-  showHint(`Neues Wesen platziert: ${currentMon.userData.species}`, 1800);
+  showHint("Tippe (Controller 0), um die Figur hüpfen zu lassen. (Controller 1) wirft die Poké-Kugel.", 2500);
 }
-function removeCurrent(){
-  if (currentMon) currentMon.visible = false;
+
+function removeCreature(){
+  creature.visible = false;
   shadowPlane.visible = false;
-  placingMode = true; showActions(false);
-  showHint("Entfernt. Reticle anvisieren & neu platzieren (zufällig).");
+  placingMode = true;
+  showActions(false);
+  showHint("Figur entfernt. Richte das Reticle aus und platziere neu.");
 }
-function triggerJump(mon){
-  const st = mon.userData.animationState;
+
+function triggerJump(){
+  const st = creature.userData.animationState;
   if (!st.jumping){ st.jumping = true; st.jumpPhase = 0; }
 }
 
-// ====== Render Loop ======
+/* --------- Render Loop ---------- */
 function render(timestamp, frame) {
-  const dt = lastTime ? (timestamp - lastTime) / 1000 : 0; lastTime = timestamp;
+  const dt = lastTime ? (timestamp - lastTime) / 1000 : 0;
+  lastTime = timestamp;
 
-  // Hit-Test / Light
+  // Hit-Test & Light Estimation
   if (frame) {
     const session = renderer.xr.getSession();
     const referenceSpace = renderer.xr.getReferenceSpace();
+
     if (!hitTestSourceRequested) {
-      session.requestReferenceSpace('viewer').then((ref) => { session.requestHitTestSource({ space: ref }).then((source) => { hitTestSource = source; }); });
+      session.requestReferenceSpace('viewer').then((ref) => {
+        session.requestHitTestSource({ space: ref }).then((source) => { hitTestSource = source; });
+      });
       session.addEventListener('end', () => { hitTestSourceRequested = false; hitTestSource = null; });
       hitTestSourceRequested = true;
     }
+
     if (hitTestSource) {
       const hits = frame.getHitTestResults(hitTestSource);
       if (hits.length > 0) {
-        const hit = hits[0]; const pose = hit.getPose(referenceSpace);
-        reticle.visible = true; reticle.matrix.fromArray(pose.transform.matrix);
-        const s = 1 + Math.sin(timestamp/250) * 0.06; reticle.scale.setScalar(s);
+        const hit = hits[0];
+        const pose = hit.getPose(referenceSpace);
+        reticle.visible = true;
+        reticle.matrix.fromArray(pose.transform.matrix);
+        const s = 1 + Math.sin(timestamp/250) * 0.06;
+        reticle.scale.setScalar(s);
         if (reticle.children[0]) (reticle.children[0].material).opacity = 0.15 + Math.abs(Math.sin(timestamp/500))*0.15;
-      } else { reticle.visible = false; }
+      } else {
+        reticle.visible = false;
+      }
     }
+
     if (xrLightProbe) {
       try {
         const estimate = frame.getLightEstimate(xrLightProbe);
@@ -479,7 +452,11 @@ function render(timestamp, frame) {
           const i = estimate.primaryLightIntensity;
           const intensity = Math.min(1.5, Math.max(0.2, (i[0]+i[1]+i[2]) / 3.0 / 1000.0));
           dirLight.intensity = intensity;
-          dirLight.position.set(estimate.primaryLightDirection.x, estimate.primaryLightDirection.y, estimate.primaryLightDirection.z).normalize().multiplyScalar(1.2);
+          dirLight.position.set(
+            estimate.primaryLightDirection.x,
+            estimate.primaryLightDirection.y,
+            estimate.primaryLightDirection.z
+          ).normalize().multiplyScalar(1.2);
           dirLight.color.setRGB(Math.max(0.6,i[0]/1000.0), Math.max(0.6,i[1]/1000.0), Math.max(0.6,i[2]/1000.0));
           hemiLight.intensity = 0.6 + (intensity*0.4);
         }
@@ -487,68 +464,102 @@ function render(timestamp, frame) {
     }
   }
 
-  // Aktuelles Wesen animieren
-  if (currentMon && currentMon.visible && !isCaptured) {
-    const ud = currentMon.userData;
+  // Kreatur: Ausrichtung + Idle-Animationen
+  if (creature.visible && !isCaptured) {
+    const ud = creature.userData;
     const st = ud.animationState;
 
-    // zur Kamera orientieren (nur Yaw)
-    const toCam = tmpVec3.subVectors(camera.position, currentMon.position); toCam.y = 0;
+    // Immer zu dir drehen (nur Yaw)
+    const toCam = tmpVec3.subVectors(camera.position, creature.position);
+    toCam.y = 0;
     let turnSpeed = 0;
     if (toCam.lengthSq() > 1e-6) {
       const targetYaw = Math.atan2(toCam.x, toCam.z);
-      let diff = ((targetYaw - currentMon.rotation.y + Math.PI) % (Math.PI * 2)) - Math.PI;
-      currentMon.rotation.y = lerpAngle(currentMon.rotation.y, targetYaw, 0.18);
+      let diff = ((targetYaw - creature.rotation.y + Math.PI) % (Math.PI * 2)) - Math.PI;
+      creature.rotation.y = lerpAngle(creature.rotation.y, targetYaw, 0.18);
       turnSpeed = Math.min(1, Math.abs(diff) / 0.4);
     }
 
     // Fuß-Trippeln beim Drehen
-    if (ud.feet && ud.feet.length >= 2) {
-      if (turnSpeed > 0.05) {
-        st.walkPhase += (3.5 + 6.0 * turnSpeed) * dt;
-        const amp = 0.012 + 0.01 * turnSpeed;
-        const base = ud.footBaseY ?? 0.03;
-        const liftL = Math.max(0, Math.sin(st.walkPhase));
-        const liftR = Math.max(0, Math.sin(st.walkPhase + Math.PI));
-        ud.feet[0].position.y = base + liftL * amp;
-        ud.feet[1].position.y = base + liftR * amp;
-        if (ud.body) ud.body.position.y = (ud.body.position.y || 0.12) + (liftL + liftR) * 0.004;
-      } else {
-        ud.feet[0].position.y += ((ud.footBaseY ?? 0.03) - ud.feet[0].position.y) * Math.min(1, 8*dt);
-        ud.feet[1].position.y += ((ud.footBaseY ?? 0.03) - ud.feet[1].position.y) * Math.min(1, 8*dt);
-        if (ud.body) ud.body.position.y += ((ud.body.userData?.baseY ?? ud.body.position.y) - ud.body.position.y) * Math.min(1, 8*dt);
-      }
+    if (turnSpeed > 0.05) {
+      st.walkPhase += (3.5 + 6.0 * turnSpeed) * dt;
+      const amp = 0.012 + 0.01 * turnSpeed;
+      const base = ud.footBaseY;
+      const liftL = Math.max(0, Math.sin(st.walkPhase));
+      const liftR = Math.max(0, Math.sin(st.walkPhase + Math.PI));
+      ud.feet[0].position.y = base + liftL * amp;
+      ud.feet[1].position.y = base + liftR * amp;
+      ud.body.position.y = 0.12 + (liftL + liftR) * 0.004;
+    } else {
+      ud.feet[0].position.y += (ud.footBaseY - ud.feet[0].position.y) * Math.min(1, 8*dt);
+      ud.feet[1].position.y += (ud.footBaseY - ud.feet[1].position.y) * Math.min(1, 8*dt);
+      ud.body.position.y += (0.12 - ud.body.position.y) * Math.min(1, 8*dt);
     }
 
     // Atmung
-    st.breathPhase += 0.02; if (ud.body) { const bs = 1 + Math.sin(st.breathPhase) * 0.03; ud.body.scale.set(bs,bs,bs); }
+    st.breathPhase += 0.02;
+    const breathScale = 1 + Math.sin(st.breathPhase) * 0.03;
+    ud.body.scale.set(breathScale, breathScale, breathScale);
+
     // Kopf idle
-    st.headBobPhase += 0.015; if (ud.head){ ud.head.rotation.y = Math.sin(st.headBobPhase) * 0.1; ud.head.position.y = (ud.head.position.y) + Math.sin(st.headBobPhase * 1.5) * 0.005; }
-    // Blinzeln (falls lids existieren)
+    st.headBobPhase += 0.015;
+    ud.head.rotation.y = Math.sin(st.headBobPhase) * 0.1;
+    ud.head.position.y = 0.28 + Math.sin(st.headBobPhase * 1.5) * 0.005;
+
+    // Blinzeln
     st.blinkTimer += 0.016;
-    if (ud.eyelids && ud.eyelids.length && st.blinkTimer > 3 + Math.random()*2) {
-      st.blinkTimer = 0; ud.eyelids.forEach(eyelid => { eyelid.scale.y = 1; setTimeout(()=>eyelid.scale.y = 0, 140); });
+    if (st.blinkTimer > 3 + Math.random() * 2) {
+      st.blinkTimer = 0;
+      ud.eyelids.forEach(eyelid => {
+        eyelid.scale.y = 1;
+        setTimeout(() => eyelid.scale.y = 0, 140);
+      });
     }
-    // Schwanzwedeln (wenn tail rotations hat)
-    st.tailWagPhase += 0.08; if (ud.tail){ if (ud.tail.rotation){ ud.tail.rotation.x = (ud.tail.rotation.x||0) + Math.sin(st.tailWagPhase)*0.1; ud.tail.rotation.y = Math.sin(st.tailWagPhase*1.2)*0.4; } }
+
+    // Ohren
+    if (Math.sin(st.headBobPhase * 0.7) > 0.95) {
+      ud.ears[0].rotation.z = -0.3 + Math.sin(timestamp/100) * 0.2;
+      ud.ears[1].rotation.z = 0.3 - Math.sin(timestamp/100) * 0.2;
+    } else {
+      ud.ears[0].rotation.z = -0.3;
+      ud.ears[1].rotation.z = 0.3;
+    }
+
+    // Schwanz
+    st.tailWagPhase += 0.08;
+    ud.tail.rotation.x = Math.PI/4 + Math.sin(st.tailWagPhase) * 0.3;
+    ud.tail.rotation.y = Math.sin(st.tailWagPhase * 1.2) * 0.4;
 
     // Hüpfen
     if (st.jumping) {
-      st.jumpPhase += 0.12; const y = Math.sin(st.jumpPhase) * 0.12;
-      currentMon.position.y = (shadowPlane.position.y + 0.03) + y;
-      if (st.jumpPhase >= Math.PI) { st.jumping = false; st.jumpPhase = 0; currentMon.position.y = shadowPlane.position.y + 0.03; }
-      const sc = 1.0 + Math.min(0.15, y*0.8); shadowPlane.scale.setScalar(sc);
-    } else { shadowPlane.scale.lerp(tmpVec3.set(1,1,1), 0.2); }
+      st.jumpPhase += 0.12;
+      const y = Math.sin(st.jumpPhase) * 0.12;
+      creature.position.y = (shadowPlane.position.y + 0.03) + y;
+      if (st.jumpPhase >= Math.PI) {
+        st.jumping = false; st.jumpPhase = 0;
+        creature.position.y = shadowPlane.position.y + 0.03;
+      }
+      const sc = 1.0 + Math.min(0.15, y * 0.8);
+      shadowPlane.scale.setScalar(sc);
+    } else {
+      shadowPlane.scale.lerp(tmpVec3.set(1,1,1), 0.2);
+    }
 
-    // Schatten folgt
-    shadowPlane.position.x = currentMon.position.x; shadowPlane.position.z = currentMon.position.z;
+    // Schatten-Plane folgt
+    shadowPlane.position.x = creature.position.x;
+    shadowPlane.position.z = creature.position.z;
   }
 
-  // Capture FSM
+  // Poké-Kugel Animation (Capture-FSM)
   if (captureState) {
-    pokeBall.rotation.x += dt * 3.0; pokeBall.rotation.y += dt * 2.1;
+    // sanfte Rotation
+    pokeBall.rotation.x += dt * 3.0;
+    pokeBall.rotation.y += dt * 2.1;
+
     if (captureState === 'fly') {
-      captureT += dt / captureData.duration; const t = Math.min(1, captureT);
+      captureT += dt / captureData.duration;
+      const t = Math.min(1, captureT);
+      // Quadratische Bezier: B(t) = (1-t)^2 * p0 + 2(1-t)t * p1 + t^2 * p2
       const p0 = captureData.start, p1 = captureData.mid, p2 = captureData.target;
       const one = 1 - t;
       pokeBall.position.set(
@@ -557,31 +568,61 @@ function render(timestamp, frame) {
         one*one*p0.z + 2*one*t*p1.z + t*t*p2.z
       );
       if (t >= 1) { captureState = 'hover'; captureT = 0; }
-    } else if (captureState === 'hover') {
-      captureT += dt; pokeBall.position.y = captureData.target.y + Math.sin(captureT*6.0)*0.02;
-      if (captureT > 0.35) { 
-        captureState = 'suck'; captureT = 0; 
-        playSuck(); // SFX: Einsaugen
-      }
-    } else if (captureState === 'suck') {
-      if (currentMon && currentMon.visible) {
-        captureT += dt / 0.7; const t = Math.min(1, captureT);
-        currentMon.position.lerp(pokeBall.position, 0.18); currentMon.rotation.y += 0.35;
-        const s = 1 - t; currentMon.scale.setScalar(Math.max(0, s));
+    }
+    else if (captureState === 'hover') {
+      captureT += dt;
+      // leichtes Schweben
+      pokeBall.position.y = captureData.target.y + Math.sin(captureT*6.0)*0.02;
+      if (captureT > 0.35) { captureState = 'suck'; captureT = 0; }
+    }
+    else if (captureState === 'suck') {
+      // Kreatur in die Kugel „einsaugen“
+      if (creature.visible) {
+        captureT += dt / 0.7; // Dauer ~0.7s
+        const t = Math.min(1, captureT);
+        // zur Kugel ziehen
+        creature.position.lerp(pokeBall.position, 0.18);
+        // kleiner Spiral-Effekt
+        creature.rotation.y += 0.35;
+        // schrumpfen
+        const s = 1 - t;
+        creature.scale.setScalar(Math.max(0, s));
         if (t >= 1) {
-          currentMon.visible = false; isCaptured = true; showActions(false);
-          captureState = 'fall'; captureT = 0; captureData.velY = 0;
+          creature.visible = false;
+          isCaptured = true;
+          showActions(false);
+          // Ball fallen lassen
+          captureState = 'fall';
+          captureT = 0;
+          captureData.velY = 0;
         }
-      } else { captureState = 'fall'; captureT = 0; captureData.velY = 0; }
-    } else if (captureState === 'fall') {
-      const g = -2.8; captureData.velY += g * dt; pokeBall.position.y += captureData.velY * dt;
+      } else {
+        // falls Figur aus irgendeinem Grund schon unsichtbar ist → direkt Drop
+        captureState = 'fall';
+        captureT = 0;
+        captureData.velY = 0;
+      }
+    }
+    else if (captureState === 'fall') {
+      // einfacher „Physik“-Fall
+      const g = -2.8; // sanfte Gravitation (AR-Comfort)
+      captureData.velY += g * dt;
+      pokeBall.position.y += captureData.velY * dt;
+
       if (pokeBall.position.y <= captureData.groundY + 0.03) {
+        // kleiner Bouncer
         pokeBall.position.y = captureData.groundY + 0.03;
-        playClick(); // SFX: Aufprall/Click
         if (Math.abs(captureData.velY) > 0.6) {
-          captureData.velY *= -0.35;
+          captureData.velY *= -0.35; // Energieverlust
         } else {
-          pokeBall.visible = false; captureState = null; captureT = 0; captureData = null; placingMode = true; showHint("Gefangen! Setze ein neues, zufälliges Wesen (C0 + Reticle).", 2500);
+          // Beendet: Kugel verschwindet
+          pokeBall.visible = false;
+          captureState = null;
+          captureT = 0;
+          captureData = null;
+          // Ab jetzt kann wieder ausgesetzt werden
+          placingMode = true;
+          showHint("Gefangen! Setze die Figur neu aus (Controller 0 + Reticle).", 2500);
         }
       }
     }
@@ -589,19 +630,13 @@ function render(timestamp, frame) {
 
   // Plane-Overlays nach 5s ohne Update ausblenden
   if (allowPlaneDebug && performance.now() - lastPlaneSeenAt > 5000) {
-    allowPlaneDebug = false; document.getElementById('legend')?.classList.add('hidden'); planeMeshes.forEach(m => m.material.opacity = 0.0);
+    allowPlaneDebug = false;
+    document.getElementById('legend')?.classList.add('hidden');
+    planeMeshes.forEach(m => m.material.opacity = 0.0);
   }
 
   renderer.render(scene, camera);
 }
-
-// ====== Plane Events ======
-function onPlaneAdded(e){ const mesh = createPlaneMesh(e.plane); planeMeshes.set(e.plane, mesh); scene.add(mesh); lastPlaneSeenAt = performance.now(); }
-function onPlaneUpdated(e){ const mesh = planeMeshes.get(e.plane); if (mesh) updatePlaneMesh(mesh, e.plane); lastPlaneSeenAt = performance.now(); }
-function onPlaneRemoved(e){ const mesh = planeMeshes.get(e.plane); if (mesh){ scene.remove(mesh); planeMeshes.delete(e.plane); } }
-
-// ====== Poké-Kugel-Geometrie Fix (kleiner Tippfehler-Schutz) ======
-function buildPokeBall_safe() { try { return buildPokeBall(); } catch(e) { console.error(e); const g=new THREE.Group(); g.add(new THREE.Mesh(new THREE.SphereGeometry(0.06,16,12), new THREE.MeshStandardMaterial({color:0xd11b1b}))); return g; } }
 </script>
 </body>
 </html>
