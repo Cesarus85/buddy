@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <title>WebXR AR – Pokémon Capture</title>
+  <title>WebXR AR – Pokémon Capture (Multi-Kreaturen)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     html, body { margin:0; padding:0; overflow:hidden; background:transparent; font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
@@ -37,7 +37,7 @@
 <body>
   <div id="ui">
     <div id="hint" class="hint">
-      Bewege das Headset/Smartphone, bis Flächen erkannt sind. <b>Controller 0: Select</b> zum Platzieren/Hüpfen. 
+      Bewege das Headset/Smartphone, bis Flächen erkannt sind. <b>Controller 0: Select</b> platziert zufällig eine Figur. 
       <b>Controller 1: Select</b> wirft die Poké-Kugel zum Fangen.
     </div>
   </div>
@@ -54,7 +54,9 @@ import { ARButton } from 'https://unpkg.com/three@0.152.2/examples/jsm/webxr/ARB
 let camera, scene, renderer;
 let controller0, controller1;
 let reticle;
-let creature, shadowPlane;
+let creature;                    // aktuell aktive Kreatur (wird aus Variants gewählt)
+let creatureVariants = [];       // alle Varianten
+let shadowPlane;
 let hitTestSource = null;
 let hitTestSourceRequested = false;
 const planeMeshes = new Map();
@@ -128,10 +130,19 @@ function init() {
   );
   reticle.add(inner);
 
-  // Kreatur
-  creature = buildCreature();
-  creature.visible = false;
-  scene.add(creature);
+  // === KREATUR-VARIANTEN ANLEGEN ===
+  const baseRed     = buildBaseRed();     baseRed.scale.setScalar(1.00); // Referenzgröße
+  const pikaLike    = buildPikaLike();    pikaLike.scale.setScalar(0.85); // etwas kleiner
+  const turtleLike  = buildTurtleLike();  turtleLike.scale.setScalar(0.95); // kompakt
+  const lizardLike  = buildLizardLike();  lizardLike.scale.setScalar(1.15); // etwas größer
+
+  creatureVariants = [baseRed, pikaLike, turtleLike, lizardLike];
+  for (const g of creatureVariants) {
+    g.visible = false;
+    scene.add(g);
+  }
+  // init „aktuelle“ Kreatur (wird beim Platzieren umgebogen)
+  creature = baseRed;
 
   // Kontakt-Schattenfläche
   shadowPlane = new THREE.Mesh(
@@ -143,7 +154,7 @@ function init() {
   scene.add(shadowPlane);
 
   // Controller
-  controller0 = renderer.xr.getController(0); // Platzieren/Hüpfen
+  controller0 = renderer.xr.getController(0); // Platzieren/Hüpfen (hier auch Zufallsauswahl)
   controller0.addEventListener('select', onSelectPrimary);
   scene.add(controller0);
 
@@ -155,7 +166,7 @@ function init() {
   window.addEventListener('resize', onWindowResize);
 
   // UI
-  document.getElementById('reposition').onclick = () => { placingMode = true; showHint("Ziel anvisieren & Select drücken, um neu zu platzieren."); };
+  document.getElementById('reposition').onclick = () => { placingMode = true; showHint("Ziel anvisieren & Select drücken – zufällige Figur wird platziert."); };
   document.getElementById('remove').onclick = () => removeCreature();
 
   // Poké-Kugel vorbereiten
@@ -184,7 +195,7 @@ function onSessionStart() {
     }
   } catch { xrLightProbe = null; }
 
-  showHint("Bewegen, bis Flächen erkannt sind. Controller 0: Platzieren. Controller 1: Poké-Kugel werfen.");
+  showHint("Bewegen, bis Flächen erkannt sind. Controller 0: zufällige Figur platzieren. Controller 1: Poké-Kugel werfen.");
 }
 
 function onWindowResize() {
@@ -193,8 +204,23 @@ function onWindowResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-/* --------- Creature ---------- */
-function buildCreature() {
+/* =========================================================================================
+   KREATUREN – alle Varianten liefern dieselben userData-Felder, damit die Animation greift:
+   userData = { body, head, eyes:[], eyelids:[], ears:[], tail, feet:[], footBaseY, animationState:{...} }
+   ========================================================================================= */
+
+// Hilfsfunktion für Standard-Anim-Setup
+function withStandardAnimData(group, extras = {}) {
+  group.userData = {
+    ...extras,
+    footBaseY: extras.footBaseY ?? 0.03,
+    animationState: { breathPhase:0, blinkTimer:0, headBobPhase:0, tailWagPhase:0, jumpPhase:0, jumping:false, walkPhase:0 }
+  };
+  return group;
+}
+
+/* --------- Basis (deine ursprüngliche rote Figur) ---------- */
+function buildBaseRed() {
   const g = new THREE.Group();
 
   const body = new THREE.Mesh(
@@ -241,13 +267,198 @@ function buildCreature() {
   tail.position.set(0,0.15,-0.1); tail.rotation.x = Math.PI/4; tail.castShadow = true;
 
   g.add(body, head, eye1, eye2, eyelid1, eyelid2, nose, cheek1, cheek2, foot1, foot2, ear1, ear2, tail);
+  return withStandardAnimData(g, { body, head, eyes:[eye1,eye2], eyelids:[eyelid1,eyelid2], ears:[ear1,ear2], tail, feet:[foot1,foot2] });
+}
 
-  g.userData = {
-    body, head, eyes:[eye1,eye2], eyelids:[eyelid1,eyelid2], ears:[ear1,ear2], tail,
-    feet:[foot1, foot2], footBaseY:0.03,
-    animationState: { breathPhase:0, blinkTimer:0, headBobPhase:0, tailWagPhase:0, jumpPhase:0, jumping:false, walkPhase:0 }
-  };
-  return g;
+/* --------- Pika-ähnlich (gelb, lange Ohren mit schwarzen Spitzen, Blitz-Schwanz) ---------- */
+function buildPikaLike() {
+  const g = new THREE.Group();
+
+  const yellow = 0xffd200;
+  const body = new THREE.Mesh(
+    new THREE.SphereGeometry(0.11, 20, 20),
+    new THREE.MeshStandardMaterial({ color: yellow, roughness:0.35 })
+  );
+  body.castShadow = true; body.position.y = 0.11;
+
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.085, 20, 20),
+    new THREE.MeshStandardMaterial({ color: yellow, roughness:0.3 })
+  );
+  head.castShadow = true; head.position.set(0,0.27,0);
+
+  const eyeGeom = new THREE.SphereGeometry(0.022, 12, 12);
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.03, 0.29, 0.065); eye1.castShadow = true;
+  const eye2 = eye1.clone(); eye2.position.x = 0.03;
+
+  const eyelidGeom = new THREE.SphereGeometry(0.024, 12, 6, 0, Math.PI*2, 0, Math.PI*0.5);
+  const eyelidMat = new THREE.MeshStandardMaterial({ color: yellow });
+  const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
+  const eyelid2 = eyelid1.clone(); eyelid2.position.copy(eye2.position); eyelid2.position.y += 0.01;
+
+  // rote Wangen
+  const cheekGeom = new THREE.CircleGeometry(0.02, 16);
+  const cheekMat = new THREE.MeshStandardMaterial({ color: 0xff4141, transparent:true, opacity:0.9 });
+  const cheek1 = new THREE.Mesh(cheekGeom, cheekMat); cheek1.position.set(-0.055,0.255,0.055);
+  const cheek2 = cheek1.clone(); cheek2.position.x = 0.055;
+
+  // Füße
+  const footGeom = new THREE.SphereGeometry(0.028, 12, 12);
+  const footMat = new THREE.MeshStandardMaterial({ color: 0xe6b800 });
+  const foot1 = new THREE.Mesh(footGeom, footMat); foot1.position.set(-0.055, 0.03, 0.02); foot1.castShadow = true;
+  const foot2 = foot1.clone(); foot2.position.x = 0.055;
+
+  // lange Ohren mit schwarzen Spitzen
+  const earBaseGeom = new THREE.ConeGeometry(0.018, 0.1, 8);
+  const earBlackGeom = new THREE.ConeGeometry(0.017, 0.04, 8);
+  const earMat = new THREE.MeshStandardMaterial({ color: yellow });
+  const tipMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+  function makeEar(sideSign){
+    const e = new THREE.Group();
+    const base = new THREE.Mesh(earBaseGeom, earMat);
+    const tip = new THREE.Mesh(earBlackGeom, tipMat);
+    base.castShadow = true; tip.castShadow = true;
+    base.position.y = 0.05; tip.position.y = 0.12;
+    e.add(base, tip);
+    e.position.set(0.05*sideSign, 0.34, -0.01);
+    e.rotation.z = sideSign > 0 ? 0.35 : -0.35;
+    return e;
+  }
+  const ear1 = makeEar(-1);
+  const ear2 = makeEar(1);
+
+  // Blitz-Schwanz mit Boxen
+  const tail = new THREE.Group();
+  const tMat = new THREE.MeshStandardMaterial({ color: yellow, metalness:0.05, roughness:0.6 });
+  const seg1 = new THREE.Mesh(new THREE.BoxGeometry(0.02,0.06,0.012), tMat);
+  const seg2 = new THREE.Mesh(new THREE.BoxGeometry(0.02,0.06,0.012), tMat);
+  const seg3 = new THREE.Mesh(new THREE.BoxGeometry(0.05,0.04,0.012), tMat);
+  seg1.position.set(0,0.04,0); seg1.rotation.z = Math.PI*0.12;
+  seg2.position.set(0.02,0.08,0); seg2.rotation.z = -Math.PI*0.15;
+  seg3.position.set(0.055,0.12,0);
+  tail.add(seg1, seg2, seg3);
+  tail.position.set(-0.02,0.16,-0.1);
+  tail.rotation.y = -0.8;
+
+  g.add(body, head, eye1, eye2, eyelid1, eyelid2, cheek1, cheek2, foot1, foot2, ear1, ear2, tail);
+  return withStandardAnimData(g, { body, head, eyes:[eye1,eye2], eyelids:[eyelid1,eyelid2], ears:[ear1,ear2], tail, feet:[foot1,foot2] });
+}
+
+/* --------- Schiggy-ähnlich (blau, Schildkrötenpanzer) ---------- */
+function buildTurtleLike() {
+  const g = new THREE.Group();
+
+  const blue = 0x6ec6ff;
+  const shellBrown = 0x8b5a2b;
+  const shellRing = 0xf3e2b4;
+
+  const body = new THREE.Mesh(
+    new THREE.SphereGeometry(0.10, 20, 20),
+    new THREE.MeshStandardMaterial({ color: blue, roughness:0.35 })
+  );
+  body.castShadow = true; body.position.y = 0.10;
+
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.085, 20, 20),
+    new THREE.MeshStandardMaterial({ color: blue, roughness:0.3 })
+  );
+  head.castShadow = true; head.position.set(0,0.26,0.02);
+
+  const eyeGeom = new THREE.SphereGeometry(0.022, 12, 12);
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.03, 0.28, 0.065); eye1.castShadow = true;
+  const eye2 = eye1.clone(); eye2.position.x = 0.03;
+
+  const eyelidGeom = new THREE.SphereGeometry(0.024, 12, 6, 0, Math.PI*2, 0, Math.PI*0.5);
+  const eyelidMat = new THREE.MeshStandardMaterial({ color: blue });
+  const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
+  const eyelid2 = eyelid1.clone(); eyelid2.position.copy(eye2.position); eyelid2.position.y += 0.01;
+
+  // Panzer: Zylinder + Torus
+  const shell = new THREE.Group();
+  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.10, 20), new THREE.MeshStandardMaterial({ color: shellBrown, roughness:0.7 }));
+  core.rotation.x = Math.PI/2; core.castShadow = true;
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.015, 10, 24), new THREE.MeshStandardMaterial({ color: shellRing, roughness:0.6 }));
+  ring.castShadow = true;
+  shell.add(core, ring);
+  shell.position.set(0,0.14,-0.02);
+
+  // Arme/Beine als kurze Zylinder
+  const limbMat = new THREE.MeshStandardMaterial({ color: blue });
+  function limb(px, py, pz){
+    const m = new THREE.Mesh(new THREE.CapsuleGeometry(0.02, 0.04, 6, 12), limbMat);
+    m.position.set(px, py, pz); m.rotation.z = Math.sign(px)*0.4; m.castShadow = true; return m;
+  }
+  const armL = limb(-0.09, 0.17, 0.02);
+  const armR = limb(0.09, 0.17, 0.02);
+  const legL = limb(-0.06, 0.04, -0.01);
+  const legR = limb(0.06, 0.04, -0.01);
+
+  // kleine angedeutete Ohren (Dummys, damit Animationen robust bleiben)
+  const ear1 = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), limbMat); ear1.position.set(-0.045,0.34, -0.02);
+  const ear2 = ear1.clone(); ear2.position.x = 0.045;
+
+  // kurzer Schwanz
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.05, 8), new THREE.MeshStandardMaterial({ color: blue }));
+  tail.position.set(0,0.15,-0.11); tail.rotation.x = Math.PI/3; tail.castShadow = true;
+
+  g.add(body, head, eye1, eye2, eyelid1, eyelid2, shell, armL, armR, legL, legR, ear1, ear2, tail);
+  const feet = [legL, legR]; // für das „Trippeln“
+  return withStandardAnimData(g, { body, head, eyes:[eye1,eye2], eyelids:[eyelid1,eyelid2], ears:[ear1,ear2], tail, feet, footBaseY:0.04 });
+}
+
+/* --------- Glumanda-ähnlich (orange, Flammenschwanz) ---------- */
+function buildLizardLike() {
+  const g = new THREE.Group();
+
+  const orange = 0xff8a3d;
+
+  const body = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 20, 20),
+    new THREE.MeshStandardMaterial({ color: orange, roughness:0.35 })
+  );
+  body.castShadow = true; body.position.y = 0.12;
+
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.09, 20, 20),
+    new THREE.MeshStandardMaterial({ color: orange, roughness:0.3 })
+  );
+  head.castShadow = true; head.position.set(0,0.30,0.01);
+
+  const eyeGeom = new THREE.SphereGeometry(0.024, 12, 12);
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+  const eye1 = new THREE.Mesh(eyeGeom, eyeMat); eye1.position.set(-0.033, 0.31, 0.07); eye1.castShadow = true;
+  const eye2 = eye1.clone(); eye2.position.x = 0.033;
+
+  const eyelidGeom = new THREE.SphereGeometry(0.026, 12, 6, 0, Math.PI*2, 0, Math.PI*0.5);
+  const eyelidMat = new THREE.MeshStandardMaterial({ color: orange });
+  const eyelid1 = new THREE.Mesh(eyelidGeom, eyelidMat); eyelid1.position.copy(eye1.position); eyelid1.position.y += 0.01; eyelid1.scale.y = 0;
+  const eyelid2 = eyelid1.clone(); eyelid2.position.copy(eye2.position); eyelid2.position.y += 0.01;
+
+  // kleine „Hörnchen“ (Ohren-Ersatz)
+  const earMat = new THREE.MeshStandardMaterial({ color: orange });
+  const ear1 = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.05, 8), earMat); ear1.position.set(-0.05,0.36,-0.02); ear1.rotation.z = -0.2; ear1.castShadow = true;
+  const ear2 = ear1.clone(); ear2.position.x = 0.05; ear2.rotation.z = 0.2;
+
+  // Füße
+  const footGeom = new THREE.SphereGeometry(0.03, 12, 12);
+  const footMat = new THREE.MeshStandardMaterial({ color: 0xffa766 });
+  const foot1 = new THREE.Mesh(footGeom, footMat); foot1.position.set(-0.06, 0.03, 0.02); foot1.castShadow = true;
+  const foot2 = foot1.clone(); foot2.position.x = 0.06;
+
+  // langer Schwanz + „Flamme“
+  const tail = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.11, 10), new THREE.MeshStandardMaterial({ color: orange }));
+  base.castShadow = true;
+  const flameOuter = new THREE.Mesh(new THREE.SphereGeometry(0.025, 16, 12), new THREE.MeshStandardMaterial({ color: 0xffe08a, emissive:0xff7b00, emissiveIntensity:0.6 }));
+  const flameInner = new THREE.Mesh(new THREE.SphereGeometry(0.015, 12, 10), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive:0xffc000, emissiveIntensity:0.8 }));
+  base.position.set(0,0.06,0); flameOuter.position.set(0,0.12,0); flameInner.position.set(0,0.12,0);
+  tail.add(base, flameOuter, flameInner);
+  tail.position.set(0.01,0.16,-0.12); tail.rotation.x = Math.PI/4;
+
+  g.add(body, head, eye1, eye2, eyelid1, eyelid2, ear1, ear2, foot1, foot2, tail);
+  return withStandardAnimData(g, { body, head, eyes:[eye1,eye2], eyelids:[eyelid1,eyelid2], ears:[ear1,ear2], tail, feet:[foot1,foot2] });
 }
 
 /* --------- Poké-Kugel ---------- */
@@ -255,21 +466,18 @@ function buildPokeBall() {
   const group = new THREE.Group();
   const r = 0.06;
 
-  // obere Halbkugel (rot)
   const hemiTop = new THREE.Mesh(
     new THREE.SphereGeometry(r, 24, 16, 0, Math.PI*2, 0, Math.PI/2),
     new THREE.MeshStandardMaterial({ color: 0xd11b1b, metalness:0.2, roughness:0.4 })
   );
   hemiTop.castShadow = true;
 
-  // untere Halbkugel (weiß)
   const hemiBot = new THREE.Mesh(
     new THREE.SphereGeometry(r, 24, 16, 0, Math.PI*2, Math.PI/2, Math.PI/2),
     new THREE.MeshStandardMaterial({ color: 0xffffff, metalness:0.05, roughness:0.6 })
   );
   hemiBot.castShadow = true;
 
-  // schwarzer Ring
   const band = new THREE.Mesh(
     new THREE.TorusGeometry(r*0.72, r*0.08, 10, 32),
     new THREE.MeshStandardMaterial({ color: 0x111111, metalness:0.3, roughness:0.3 })
@@ -277,7 +485,6 @@ function buildPokeBall() {
   band.rotation.x = Math.PI/2;
   band.castShadow = true;
 
-  // Knopf
   const buttonOuter = new THREE.Mesh(
     new THREE.CylinderGeometry(r*0.16, r*0.16, r*0.06, 20),
     new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness:0.1, roughness:0.5 })
@@ -337,6 +544,11 @@ function showActions(show){ document.getElementById('actions').classList.toggle(
 /* --------- Primary Controller (Platzieren/Hüpfen) ---------- */
 function onSelectPrimary() {
   if (reticle.visible || placingMode) {
+    // Zufällig eine Kreatur auswählen
+    const idx = Math.floor(Math.random() * creatureVariants.length);
+    creature = creatureVariants[idx];
+    // Alle anderen verbergen
+    for (const g of creatureVariants){ if (g !== creature) g.visible = false; }
     placeCreatureAtReticle();
     placingMode = false;
     return;
@@ -358,7 +570,7 @@ function onSelectCapture() {
   const mid = start.clone().lerp(target, 0.5);
   mid.y += 0.35;
 
-  // Bodenhöhe: da wir in AR keinen globalen Boden kennen, nutzen wir die Schattenplane
+  // Bodenhöhe
   const groundY = shadowPlane.visible ? shadowPlane.position.y : (creature.position.y - 0.03);
 
   // Kugel initialisieren
@@ -370,12 +582,7 @@ function onSelectCapture() {
   // Capture-Phasen setzen
   captureState = 'fly';
   captureT = 0;
-  captureData = {
-    start, mid, target,
-    groundY,
-    velY: 0,            // für die Fallphase
-    duration: 0.6       // Flugdauer bis über die Figur
-  };
+  captureData = { start, mid, target, groundY, velY: 0, duration: 0.6 };
   showHint("Poké-Kugel geworfen!", 1200);
 }
 
@@ -392,19 +599,18 @@ function placeCreatureAtReticle(){
   shadowPlane.position.y += 0.002;
   shadowPlane.visible = true;
 
-  creature.scale.set(1,1,1);
   creature.visible = true;
   isCaptured = false; // neu ausgesetzt = nicht mehr gefangen
   showActions(true);
-  showHint("Tippe (Controller 0), um die Figur hüpfen zu lassen. (Controller 1) wirft die Poké-Kugel.", 2500);
+  showHint("Figur gesetzt. Tipp/Select (Controller 0) lässt sie hüpfen. (Controller 1) wirft die Poké-Kugel.", 2500);
 }
 
 function removeCreature(){
-  creature.visible = false;
+  for (const g of creatureVariants) g.visible = false;
   shadowPlane.visible = false;
   placingMode = true;
   showActions(false);
-  showHint("Figur entfernt. Richte das Reticle aus und platziere neu.");
+  showHint("Figur entfernt. Richte das Reticle aus und platziere neu (zufällige Auswahl).");
 }
 
 function triggerJump(){
@@ -465,7 +671,7 @@ function render(timestamp, frame) {
   }
 
   // Kreatur: Ausrichtung + Idle-Animationen
-  if (creature.visible && !isCaptured) {
+  if (creature && creature.visible && !isCaptured) {
     const ud = creature.userData;
     const st = ud.animationState;
 
@@ -481,7 +687,7 @@ function render(timestamp, frame) {
     }
 
     // Fuß-Trippeln beim Drehen
-    if (turnSpeed > 0.05) {
+    if (ud.feet && ud.feet.length && turnSpeed > 0.05) {
       st.walkPhase += (3.5 + 6.0 * turnSpeed) * dt;
       const amp = 0.012 + 0.01 * turnSpeed;
       const base = ud.footBaseY;
@@ -489,8 +695,9 @@ function render(timestamp, frame) {
       const liftR = Math.max(0, Math.sin(st.walkPhase + Math.PI));
       ud.feet[0].position.y = base + liftL * amp;
       ud.feet[1].position.y = base + liftR * amp;
+      ud.body.position.y = (ud.body.position.y || 0.12); // Stabilisierung der Basis
       ud.body.position.y = 0.12 + (liftL + liftR) * 0.004;
-    } else {
+    } else if (ud.feet && ud.feet.length){
       ud.feet[0].position.y += (ud.footBaseY - ud.feet[0].position.y) * Math.min(1, 8*dt);
       ud.feet[1].position.y += (ud.footBaseY - ud.feet[1].position.y) * Math.min(1, 8*dt);
       ud.body.position.y += (0.12 - ud.body.position.y) * Math.min(1, 8*dt);
@@ -503,12 +710,14 @@ function render(timestamp, frame) {
 
     // Kopf idle
     st.headBobPhase += 0.015;
-    ud.head.rotation.y = Math.sin(st.headBobPhase) * 0.1;
-    ud.head.position.y = 0.28 + Math.sin(st.headBobPhase * 1.5) * 0.005;
+    if (ud.head){
+      ud.head.rotation.y = Math.sin(st.headBobPhase) * 0.1;
+      ud.head.position.y = (ud.head.position.y) + Math.sin(st.headBobPhase * 1.5) * 0.005;
+    }
 
     // Blinzeln
     st.blinkTimer += 0.016;
-    if (st.blinkTimer > 3 + Math.random() * 2) {
+    if (st.blinkTimer > 3 + Math.random() * 2 && ud.eyelids) {
       st.blinkTimer = 0;
       ud.eyelids.forEach(eyelid => {
         eyelid.scale.y = 1;
@@ -517,18 +726,19 @@ function render(timestamp, frame) {
     }
 
     // Ohren
-    if (Math.sin(st.headBobPhase * 0.7) > 0.95) {
-      ud.ears[0].rotation.z = -0.3 + Math.sin(timestamp/100) * 0.2;
-      ud.ears[1].rotation.z = 0.3 - Math.sin(timestamp/100) * 0.2;
-    } else {
-      ud.ears[0].rotation.z = -0.3;
-      ud.ears[1].rotation.z = 0.3;
+    if (ud.ears && ud.ears.length === 2){
+      if (Math.sin(st.headBobPhase * 0.7) > 0.95) {
+        ud.ears[0].rotation.z = (ud.ears[0].rotation.z ?? -0.3) + Math.sin(timestamp/100) * 0.2;
+        ud.ears[1].rotation.z = (ud.ears[1].rotation.z ?? 0.3)  - Math.sin(timestamp/100) * 0.2;
+      }
     }
 
     // Schwanz
-    st.tailWagPhase += 0.08;
-    ud.tail.rotation.x = Math.PI/4 + Math.sin(st.tailWagPhase) * 0.3;
-    ud.tail.rotation.y = Math.sin(st.tailWagPhase * 1.2) * 0.4;
+    if (ud.tail){
+      st.tailWagPhase += 0.08;
+      ud.tail.rotation.x = (ud.tail.rotation.x ?? Math.PI/4) + Math.sin(st.tailWagPhase) * 0.3;
+      ud.tail.rotation.y = Math.sin(st.tailWagPhase * 1.2) * 0.4;
+    }
 
     // Hüpfen
     if (st.jumping) {
@@ -552,14 +762,13 @@ function render(timestamp, frame) {
 
   // Poké-Kugel Animation (Capture-FSM)
   if (captureState) {
-    // sanfte Rotation
-    pokeBall.rotation.x += dt * 3.0;
-    pokeBall.rotation.y += dt * 2.1;
+    const dtLocal = dt;
+    pokeBall.rotation.x += dtLocal * 3.0;
+    pokeBall.rotation.y += dtLocal * 2.1;
 
     if (captureState === 'fly') {
-      captureT += dt / captureData.duration;
+      captureT += dtLocal / captureData.duration;
       const t = Math.min(1, captureT);
-      // Quadratische Bezier: B(t) = (1-t)^2 * p0 + 2(1-t)t * p1 + t^2 * p2
       const p0 = captureData.start, p1 = captureData.mid, p2 = captureData.target;
       const one = 1 - t;
       pokeBall.position.set(
@@ -570,57 +779,46 @@ function render(timestamp, frame) {
       if (t >= 1) { captureState = 'hover'; captureT = 0; }
     }
     else if (captureState === 'hover') {
-      captureT += dt;
-      // leichtes Schweben
+      captureT += dtLocal;
       pokeBall.position.y = captureData.target.y + Math.sin(captureT*6.0)*0.02;
       if (captureT > 0.35) { captureState = 'suck'; captureT = 0; }
     }
     else if (captureState === 'suck') {
-      // Kreatur in die Kugel „einsaugen“
-      if (creature.visible) {
-        captureT += dt / 0.7; // Dauer ~0.7s
+      if (creature && creature.visible) {
+        captureT += dtLocal / 0.7;
         const t = Math.min(1, captureT);
-        // zur Kugel ziehen
         creature.position.lerp(pokeBall.position, 0.18);
-        // kleiner Spiral-Effekt
         creature.rotation.y += 0.35;
-        // schrumpfen
         const s = 1 - t;
-        creature.scale.setScalar(Math.max(0, s));
+        creature.scale.setScalar(Math.max(0, s) * (creature.userData.initialScale || 1));
         if (t >= 1) {
           creature.visible = false;
           isCaptured = true;
           showActions(false);
-          // Ball fallen lassen
           captureState = 'fall';
           captureT = 0;
           captureData.velY = 0;
         }
       } else {
-        // falls Figur aus irgendeinem Grund schon unsichtbar ist → direkt Drop
         captureState = 'fall';
         captureT = 0;
         captureData.velY = 0;
       }
     }
     else if (captureState === 'fall') {
-      // einfacher „Physik“-Fall
-      const g = -2.8; // sanfte Gravitation (AR-Comfort)
-      captureData.velY += g * dt;
-      pokeBall.position.y += captureData.velY * dt;
+      const g = -2.8;
+      captureData.velY += g * dtLocal;
+      pokeBall.position.y += captureData.velY * dtLocal;
 
       if (pokeBall.position.y <= captureData.groundY + 0.03) {
-        // kleiner Bouncer
         pokeBall.position.y = captureData.groundY + 0.03;
         if (Math.abs(captureData.velY) > 0.6) {
-          captureData.velY *= -0.35; // Energieverlust
+          captureData.velY *= -0.35;
         } else {
-          // Beendet: Kugel verschwindet
           pokeBall.visible = false;
           captureState = null;
           captureT = 0;
           captureData = null;
-          // Ab jetzt kann wieder ausgesetzt werden
           placingMode = true;
           showHint("Gefangen! Setze die Figur neu aus (Controller 0 + Reticle).", 2500);
         }
